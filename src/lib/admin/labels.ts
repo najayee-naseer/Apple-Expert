@@ -4,12 +4,14 @@ import type { UnitView } from './units'
 /**
  * Barcode labels for received units — one sticker per physical item.
  *
- * Each label carries:
+ * Each label identifies one physical unit and carries:
  *   - the product name and variant (what the item is)
  *   - a QR code holding the unit barcode (phone cameras read it)
  *   - a Code 128 barcode of the same value (USB / Bluetooth counter scanners
  *     read it) with the value printed underneath
  *   - the IMEI / serial number when the unit has one
+ *
+ * Quantity-tracked items get a plain shelf label instead (below), never a code.
  *
  * Everything is drawn as vectors except the QR, so the bars stay sharp on any
  * printer. jsPDF and qrcode are loaded only when a label is actually printed.
@@ -71,42 +73,81 @@ function fit(doc: PdfDoc, text: string, maxWidth: number): string {
   return cut.trimEnd() + '…'
 }
 
-/** One 50 × 30 mm label with its top-left corner at (x, y). */
-async function drawLabel(doc: PdfDoc, item: LabelItem, x: number, y: number) {
-  const pad = 2
-  const qrSize = 13
-
-  // QR, top-left.
-  doc.addImage(await qrDataUrl(item.barcode), 'PNG', x + pad, y + pad, qrSize, qrSize)
-
-  // Name, variant, IMEI to the right of the QR.
-  const textX = x + pad + qrSize + 2
-  const textW = LABEL_W - (textX - x) - pad
-  doc.setTextColor(0, 0, 0)
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(7.5)
-  doc.text(fit(doc, item.title, textW), textX, y + pad + 3)
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(6.5)
-  if (item.subtitle) doc.text(fit(doc, item.subtitle, textW), textX, y + pad + 6.2)
-  if (item.serial) {
-    doc.setFontSize(6)
-    doc.text(fit(doc, `IMEI/SN ${item.serial}`, textW), textX, y + pad + 9.4)
+/** Shrinks the font until an identifier fits: cutting one short would make it wrong. */
+function shrinkToFit(doc: PdfDoc, text: string, maxWidth: number, size: number, minSize: number) {
+  let current = size
+  doc.setFontSize(current)
+  while (current > minSize && doc.getTextWidth(text) > maxWidth) {
+    current -= 0.25
+    doc.setFontSize(current)
   }
-  doc.setFontSize(5.5)
-  doc.text('Apple Expert', textX, y + pad + 12.6)
+}
 
-  // Code 128 across the bottom, value underneath.
-  const barTop = y + pad + qrSize + 1.5
-  drawCode128(doc, item.barcode, x + pad, barTop, LABEL_W - pad * 2, 7.5)
+/** At most two lines of name; anything longer ends with an ellipsis on the second. */
+function nameLines(doc: PdfDoc, text: string, maxWidth: number): string[] {
+  const lines = doc.splitTextToSize(text, maxWidth) as string[]
+  return lines.length <= 2 ? lines : [lines[0], fit(doc, lines.slice(1).join(' '), maxWidth)]
+}
+
+/** A 15-digit serial is an IMEI; anything else is a serial number. */
+function serialLine(serial: string): string {
+  return /^\d{15}$/.test(serial) ? `IMEI ${serial}` : `S/N ${serial}`
+}
+
+/**
+ * One 50 × 30 mm label for one physical unit, top-left corner at (x, y).
+ *
+ * Black on white with no filled areas, so a thermal printer can print it. The QR
+ * and the barcode keep clear space around them (a scanner needs it), which is why
+ * the left and bottom margins are not smaller.
+ */
+async function drawLabel(doc: PdfDoc, item: LabelItem, x: number, y: number) {
+  const margin = 2.5
+  const qrSize = 12
+  const qrTop = 2.5
+
+  doc.addImage(await qrDataUrl(item.barcode), 'PNG', x + margin, y + qrTop, qrSize, qrSize)
+
+  const textX = x + margin + qrSize + 2.5
+  const textW = LABEL_W - (textX - x) - margin
+  doc.setTextColor(0, 0, 0)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(5.5)
+  doc.text('APPLE EXPERT', textX, y + 3.8)
+
+  let cursor = y + 6.8
+  doc.setFontSize(7.5)
+  for (const line of nameLines(doc, item.title, textW)) {
+    doc.text(line, textX, cursor)
+    cursor += 2.8
+  }
+
+  doc.setFont('helvetica', 'normal')
+  if (item.subtitle) {
+    doc.setFontSize(6.5)
+    doc.text(fit(doc, item.subtitle, textW), textX, cursor)
+    cursor += 2.5
+  }
+  if (item.serial) {
+    const line = serialLine(item.serial)
+    shrinkToFit(doc, line, textW, 6, 4.5)
+    doc.text(line, textX, cursor)
+  }
+
+  // Code 128 across the bottom, its value underneath for reading by eye.
+  const barTop = y + 16.8
+  drawCode128(doc, item.barcode, x + margin - 0.5, barTop, LABEL_W - (margin - 0.5) * 2, 7.2)
   doc.setFont('courier', 'bold')
-  doc.setFontSize(7)
+  doc.setFontSize(8)
   doc.text(item.barcode, x + LABEL_W / 2, barTop + 10, { align: 'center' })
 }
 
 /**
  * A label for a quantity-tracked item, which has no barcode in the database. It
  * deliberately carries no code of any kind: nothing could resolve it at the counter.
+ * Every copy is the same, and the label says so, so a sticker is never mistaken for
+ * the identity of one physical item.
  */
 export interface ShelfLabelItem {
   title: string
@@ -115,24 +156,44 @@ export interface ShelfLabelItem {
 }
 
 function drawShelfLabel(doc: PdfDoc, item: ShelfLabelItem, x: number, y: number) {
-  const pad = 3
-  const width = LABEL_W - pad * 2
+  const margin = 3
+  const width = LABEL_W - margin * 2
+  const right = x + LABEL_W - margin
   doc.setTextColor(0, 0, 0)
+  doc.setDrawColor(0, 0, 0)
+
   doc.setFont('helvetica', 'bold')
+  doc.setFontSize(6)
+  doc.text('APPLE EXPERT', x + margin, y + 5.2)
+
+  // Outlined, not filled: thermal print heads handle it better.
+  const tag = 'SHELF LABEL'
+  const tagW = doc.getTextWidth(tag) + 2.4
+  doc.setLineWidth(0.25)
+  doc.rect(right - tagW, y + 2.8, tagW, 3.4)
+  doc.text(tag, right - 1.2, y + 5.2, { align: 'right' })
+
+  let cursor = y + 10.6
   doc.setFontSize(10)
-  const titleLines = (doc.splitTextToSize(item.title, width) as string[]).slice(0, 2)
-  doc.text(titleLines, x + pad, y + pad + 3.5)
-  let cursor = y + pad + 3.5 + titleLines.length * 4.2
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(8)
-  if (item.subtitle) {
-    doc.text(fit(doc, item.subtitle, width), x + pad, cursor)
-    cursor += 3.6
+  for (const line of nameLines(doc, item.title, width)) {
+    doc.text(line, x + margin, cursor)
+    cursor += 3.9
   }
-  doc.setFontSize(6.5)
-  doc.text(fit(doc, item.reference, width), x + pad, y + LABEL_H - pad - 2.8)
+
+  doc.setFont('helvetica', 'normal')
+  if (item.subtitle) {
+    doc.setFontSize(8)
+    doc.text(fit(doc, item.subtitle, width), x + margin, cursor)
+  }
+
+  doc.setLineWidth(0.15)
+  doc.line(x + margin, y + 22.6, right, y + 22.6)
   doc.setFontSize(5.5)
-  doc.text('Apple Expert', x + pad, y + LABEL_H - pad)
+  doc.text('Same product on every copy.', x + margin, y + 24.8)
+  doc.text('Not an individual item label.', x + margin, y + 26.9)
+  // A reference number is never cut short: it shrinks to fit instead.
+  shrinkToFit(doc, item.reference, 19, 5.5, 4.5)
+  doc.text(item.reference, right, y + 26.9, { align: 'right' })
 }
 
 /** Builds the shelf label PDF and returns it as a Blob. */

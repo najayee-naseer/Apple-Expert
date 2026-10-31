@@ -143,7 +143,8 @@ export function ShelfLabelsPanel({ lines, grnNumber }: { lines: GrnLineRow[]; gr
   const [error, setError] = useState<string | null>(null)
 
   const accepted = lines.filter((l) => l.accepted_quantity > 0)
-  const copiesOf = (l: GrnLineRow) => copies[l.id] ?? String(l.accepted_quantity)
+  // One by default: this labels a shelf, not each item.
+  const copiesOf = (l: GrnLineRow) => copies[l.id] ?? '1'
 
   async function print() {
     const items: ShelfLabelItem[] = []
@@ -174,7 +175,7 @@ export function ShelfLabelsPanel({ lines, grnNumber }: { lines: GrnLineRow[]; gr
         <h3 className="text-[14px] font-bold text-foreground">Tracked by quantity</h3>
         <p className="text-[12px] leading-snug text-muted-foreground">
           {lines.length === 1 ? 'This line has' : 'These lines have'} no unit barcodes: stock is a number, not individual items, so there is nothing to scan.
-          You can print plain shelf labels with the name and GRN number.
+          You can print shelf labels with the name and GRN number.
         </p>
       </div>
 
@@ -199,7 +200,9 @@ export function ShelfLabelsPanel({ lines, grnNumber }: { lines: GrnLineRow[]; gr
             {busy ? <LoaderCircle size={15} className="mr-1.5 animate-spin motion-reduce:animate-none" /> : <Printer size={15} className="mr-1.5" />}
             Print shelf labels
           </Button>
-          <p className="text-[11.5px] text-muted-foreground">These labels have no barcode and cannot be scanned at the counter.</p>
+          <p className="text-[11.5px] leading-snug text-muted-foreground">
+            Every copy is identical: they all mean the same product and variant, not separate items you can tell apart. They have no barcode and cannot be scanned at the counter.
+          </p>
         </>
       )}
       {error && <ErrorNote message={error} />}
