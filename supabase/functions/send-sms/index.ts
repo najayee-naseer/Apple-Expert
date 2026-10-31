@@ -25,7 +25,7 @@
  * never the raw SMSlenz response (it can carry recipient and balance details).
  */
 
-import { Webhook } from 'standardwebhooks'
+import { Webhook } from 'npm:standardwebhooks@1.0.0'
 
 const DEFAULT_SMSLENZ_API_BASE_URL = 'https://www.smslenz.lk/api'
 const SMSLENZ_TIMEOUT_MS = 4000

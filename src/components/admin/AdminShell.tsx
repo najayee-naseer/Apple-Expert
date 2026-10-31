@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Menu, X, LogOut, Sun, Moon, ShieldCheck, ChevronDown } from 'lucide-react'
+import { Menu, X, LogOut, Sun, Moon, ShieldCheck, ChevronDown, Store } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/context/ThemeContext'
 import { useAdminAuth } from '@/context/AdminAuthContext'
@@ -214,6 +214,16 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             <div className="lg:hidden min-w-0"><BrandMark /></div>
 
             <div className="ml-auto flex items-center gap-2">
+              <Link
+                href="/"
+                aria-label="Back to store"
+                title="Customer Store"
+                className="focus-ring flex items-center gap-1.5 h-10 px-3 rounded-xl border border-mint-deep bg-card text-xs font-semibold text-primary hover:bg-primary-soft active:scale-95 transition"
+              >
+                <Store size={15} />
+                <span>Store</span>
+              </Link>
+
               <button
                 type="button"
                 onClick={toggleTheme}

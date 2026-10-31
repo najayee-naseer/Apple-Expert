@@ -69,11 +69,16 @@ async function load(): Promise<void> {
   if (inFlight || !isSupabaseConfigured()) return
   inFlight = true
   try {
-    const { data, error } = await getSupabaseClient()
+    // 5-second timeout: network hang-ஆனா forever 'loading' stuck ஆகாமல் fallback-க்கு போகும்
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('store_settings fetch timeout')), 5000)
+    )
+    const query = getSupabaseClient()
       .from('store_settings')
       .select('*')
       .eq('id', true)
       .maybeSingle()
+    const { data, error } = await Promise.race([query, timeout])
     snapshot = error || !data
       ? { settings: snapshot.status === 'ready' ? snapshot.settings : DEFAULT_STORE_SETTINGS, status: snapshot.status === 'ready' ? 'ready' : 'fallback' }
       : { settings: data, status: 'ready' }
