@@ -5,7 +5,8 @@ import { describeAdminError } from './errors'
 /**
  * Admin stock data access.
  *
- * Stock is written ONLY through admin_set_stock() (migration 20261023120000).
+ * Admin adjustments go ONLY through admin_set_stock() (migration 20261023120000);
+ * goods received, sales and returns have their own database functions.
  * The products.stock / product_variants.stock columns are guarded by a trigger
  * that refuses any change without a matching inventory_movements row in the
  * same transaction, and clients cannot write that table — so there is no
@@ -39,6 +40,10 @@ const REASON_LABEL: Record<string, string> = {
   seed: 'Initial data',
   sale: 'Sale',
   transfer: 'Transfer',
+  supplier_return: 'Returned to supplier',
+  supplier_return_reversal: 'Supplier return reversed',
+  quarantine: 'Moved to quarantine',
+  quarantine_release: 'Released from quarantine',
 }
 
 export function reasonLabel(reason: string): string {
@@ -95,6 +100,20 @@ export async function setStock(input: StockAdjustment): Promise<StockResult> {
   })
   if (error) throw error
   return data as unknown as StockResult
+}
+
+/**
+ * Switches one stock holder between a number and individually barcoded units. The
+ * database refuses while any stock, hold or unit exists, so nothing can be lost.
+ */
+export async function setTrackingMode(productId: string, variantId: string | null, mode: 'quantity' | 'unit', note: string): Promise<void> {
+  const { error } = await getSupabaseClient().rpc('admin_set_tracking_mode', {
+    p_product_id: productId,
+    p_variant_id: variantId,
+    p_mode: mode,
+    p_note: note,
+  })
+  if (error) throw error
 }
 
 /** How many ledger rows the editor loads per product. */
@@ -176,6 +195,8 @@ export function describeStockError(err: unknown): string {
     case 'stock_locked':
     case 'stock_mode_locked': return 'Stock can only be changed with Adjust stock.'
     case 'unit_tracked': return 'This item is tracked by barcode. Add stock with a GRN, and remove it by selling or writing off units (Inventory).'
+    case 'stock_reserved': return `${detail}`
+    case 'tracking_mode_locked': return detail ? detail[0].toUpperCase() + detail.slice(1) : 'The tracking mode cannot be changed right now.'
     default: return describeAdminError(err, 'The database refused the stock change.')
   }
 }

@@ -192,7 +192,8 @@ export function ProductCreator({
         subcategory,
         model: model.trim() || null,
         description: description.trim(),
-        openingStock: stock ?? 0,
+        // Individually tracked items get stock only through a GRN.
+        openingStock: categories.find((c) => c.id === categoryId)?.default_tracking_mode === 'unit' ? 0 : stock ?? 0,
         lifecycle_status: lifecycle || null,
         is_new: isNew,
         condition,
@@ -309,8 +310,17 @@ export function ProductCreator({
                 onChange={setDescription} />
 
               <div className="grid gap-4 sm:grid-cols-2">
-                <NumberField id="n-stock" label="Opening stock" min={0} value={stock} disabled={busy} onChange={setStock}
-                  hint={hasVariants ? 'shared by all variants' : 'recorded in stock history'} />
+                {categories.find((c) => c.id === categoryId)?.default_tracking_mode === 'unit' ? (
+                  <div>
+                    <span className="mb-1.5 block text-[13px] font-semibold text-foreground">Stock</span>
+                    <p className="rounded-xl border border-dashed border-mint-deep dark:border-border px-3 py-2 text-[12.5px] text-muted-foreground">
+                      Tracked item by item. Receive its stock with a GRN so every item gets a barcode.
+                    </p>
+                  </div>
+                ) : (
+                  <NumberField id="n-stock" label="Opening stock" min={0} value={stock} disabled={busy} onChange={setStock}
+                    hint={hasVariants ? 'shared by all variants' : 'recorded in stock history'} />
+                )}
                 <SelectField id="n-life" label="Lifecycle" value={lifecycle} disabled={busy} allowEmpty
                   onChange={setLifecycle}
                   options={LIFECYCLE_OPTIONS.map((s) => ({ value: s, label: s }))} />

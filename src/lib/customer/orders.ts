@@ -19,7 +19,28 @@ export interface PlacedOrder {
   totalCents: number
 }
 
-export async function placeOrder(cart: CartItem[], notes?: string): Promise<PlacedOrder> {
+/** crypto.randomUUID exists only in secure contexts: a dev server over LAN is not one. */
+export function newOrderRequestId(): string {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  const b = crypto.getRandomValues(new Uint8Array(16))
+  b[6] = (b[6] & 0x0f) | 0x40
+  b[8] = (b[8] & 0x3f) | 0x80
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+
+/** What identifies a basket: the same content retries under the same request id. */
+export function cartOrderKey(cart: CartItem[]): string {
+  return JSON.stringify(cart.map((item) => [item.product.id, item.variant?.id ?? null, item.warrantyOptionId ?? null, item.quantity]))
+}
+
+/**
+ * requestId stays the same across retries of one basket, so a retry after a lost
+ * response returns the first order instead of placing a second one and holding
+ * its stock twice. Falls back to place_order() on a database that has not been
+ * updated yet, where a request id does not exist.
+ */
+export async function placeOrder(cart: CartItem[], requestId: string, notes?: string): Promise<PlacedOrder> {
   const lines = cart.map((item) => ({
     product_id: item.product.id,
     variant_key: item.variant?.id ?? null,
@@ -27,10 +48,18 @@ export async function placeOrder(cart: CartItem[], notes?: string): Promise<Plac
     quantity: item.quantity,
   }))
 
-  const { data, error } = await getSupabaseClient().rpc('place_order', {
+  const supabase = getSupabaseClient()
+  let { data, error } = await supabase.rpc('place_order_v2', {
     p_lines: lines,
-    ...(notes?.trim() ? { p_notes: notes.trim() } : {}),
+    p_notes: notes?.trim() ? notes.trim() : null,
+    p_request_id: requestId,
   })
+  if (error && (error.code === 'PGRST202' || error.message.includes('Could not find the function'))) {
+    ({ data, error } = await supabase.rpc('place_order', {
+      p_lines: lines,
+      ...(notes?.trim() ? { p_notes: notes.trim() } : {}),
+    }))
+  }
   if (error) throw new Error(describeOrderError(error.message))
 
   const result = data as { id: string; order_number: string; total_cents: number }
@@ -53,7 +82,9 @@ export function describeOrderError(message: string): string {
     case 'variant_unavailable':
     case 'variant_required': return 'An option in your bag is no longer available. Remove that item and add it again.'
     case 'price_unavailable': return 'An item in your bag does not have a price yet. Remove it or contact us.'
-    case 'insufficient_stock': return 'We do not have enough stock for one of your items. Lower the quantity and try again.'
+    case 'insufficient_stock': return 'We do not have enough stock of one of your selected options. Lower the quantity, or choose another colour or storage.'
+    case 'reservation_limit_reached': return 'This account already holds as much as it can at one time. Please wait for your open orders to be confirmed, or contact us.'
+    case 'request_id_reused': return 'Your bag changed while the order was being sent. Please try again.'
     case 'warranty_option_invalid':
     case 'warranty_not_applicable': return 'A warranty you chose is no longer offered. Remove that item and choose again.'
     case 'store_unavailable': return 'Ordering is unavailable right now. Please try again later.'

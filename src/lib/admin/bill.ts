@@ -24,12 +24,13 @@ function money(cents: number): string {
 
 export async function buildBillPdf(detail: PosSaleDetail, shop: BillShop): Promise<Blob> {
   const { jsPDF } = await import('jspdf')
-  const { sale, items, cashierName } = detail
+  const { sale, items, cashierName, refundedCents } = detail
 
   // Height: header + one block per item + totals + footer.
-  const itemBlock = (i: (typeof items)[number]) => 9 + (i.serial_snapshot ? 3.4 : 0) + (i.returned_at ? 3.4 : 0)
+  const itemBlock = (i: (typeof items)[number]) => 9 + (i.serial_snapshot ? 3.4 : 0) + (i.returned_quantity > 0 ? 3.4 : 0)
   const height = 62 + items.reduce((h, i) => h + itemBlock(i), 0)
     + (sale.customer_name || sale.customer_phone ? 8 : 0) + (sale.discount_cents > 0 ? 5 : 0)
+    + (refundedCents > 0 ? 10 : 0)
 
   const doc = new jsPDF({ unit: 'mm', format: [WIDTH, Math.max(height, 90)], orientation: 'portrait' })
   const right = WIDTH - MARGIN
@@ -83,16 +84,16 @@ export async function buildBillPdf(detail: PosSaleDetail, shop: BillShop): Promi
     doc.setFontSize(8.5)
     const nameLines = (doc.splitTextToSize(name, inner - 24) as string[]).slice(0, 2)
     doc.text(nameLines, MARGIN, y)
-    doc.text(money(item.unit_price_cents), right, y, { align: 'right' })
+    doc.text(money(item.line_total_cents), right, y, { align: 'right' })
     y += 3.6 * nameLines.length
     doc.setFont('courier', 'normal')
     doc.setFontSize(7.5)
-    doc.text(item.barcode_snapshot, MARGIN, y)
+    doc.text(item.barcode_snapshot ?? `${item.quantity} x ${money(item.unit_price_cents)}`, MARGIN, y)
     y += 3.4
     if (item.serial_snapshot) { doc.text(`IMEI/SN ${item.serial_snapshot}`, MARGIN, y); y += 3.4 }
-    if (item.returned_at) {
+    if (item.returned_quantity > 0) {
       doc.setFont('helvetica', 'italic')
-      doc.text(`Returned ${formatDateTime(item.returned_at)}`, MARGIN, y)
+      doc.text(`${item.returned_quantity} returned${item.returned_at ? ` ${formatDateTime(item.returned_at)}` : ''}`, MARGIN, y)
       y += 3.4
     }
     y += 1.6
@@ -101,7 +102,8 @@ export async function buildBillPdf(detail: PosSaleDetail, shop: BillShop): Promi
 
   doc.setFont('helvetica', 'normal')
   doc.setFontSize(9)
-  doc.text(`Subtotal (${items.length} item${items.length === 1 ? '' : 's'})`, MARGIN, y)
+  const itemCount = items.reduce((n, i) => n + i.quantity, 0)
+  doc.text(`Subtotal (${itemCount} item${itemCount === 1 ? '' : 's'})`, MARGIN, y)
   doc.text(money(sale.subtotal_cents), right, y, { align: 'right' })
   y += 5
   if (sale.discount_cents > 0) {
@@ -118,6 +120,18 @@ export async function buildBillPdf(detail: PosSaleDetail, shop: BillShop): Promi
   doc.setFontSize(8.5)
   doc.text(`Paid by ${paymentLabel(sale.payment_method)}`, MARGIN, y)
   y += 6
+  // Goods coming back and money going back are separate facts: only a recorded
+  // refund appears here.
+  if (refundedCents > 0) {
+    doc.text('Refunded', MARGIN, y)
+    doc.text(`- ${money(refundedCents)}`, right, y, { align: 'right' })
+    y += 5
+    doc.setFont('helvetica', 'bold')
+    doc.text('Net paid', MARGIN, y)
+    doc.text(money(sale.total_cents - refundedCents), right, y, { align: 'right' })
+    doc.setFont('helvetica', 'normal')
+    y += 5
+  }
 
   doc.setFontSize(8)
   doc.text('Thank you for shopping with us!', WIDTH / 2, y, { align: 'center' })

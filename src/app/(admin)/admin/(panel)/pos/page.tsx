@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { Camera, LoaderCircle, Printer, ScanBarcode, Trash2, ReceiptText, RotateCcw } from 'lucide-react'
+import { Camera, Check, LoaderCircle, Plus, Printer, ScanBarcode, Trash2, ReceiptText, RotateCcw, UserRound, X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import { formatPrice } from '@/utils/formatPrice'
@@ -14,9 +14,11 @@ import { useStoreSettings } from '@/lib/store/settings'
 import { buildBillPdf } from '@/lib/admin/bill'
 import { openPdf } from '@/lib/admin/labels'
 import {
-  lookupUnit, createPosSale, loadPosSale, listPosSales, canSell, newRequestId, normalizeCode,
-  describeUnitError, formatDateTime, paymentLabel, PAYMENT_METHODS, UNIT_STATUS_LABEL,
-  type ScannedUnit, type PaymentMethod, type PosSaleListItem, type PosSaleResult, type UnitStatus,
+  lookupUnit, quoteProduct, createPosSale, loadPosSale, listPosSales, listProductsForGrn, canSell, canReceiveStock, newRequestId, normalizeCode,
+  findCounterCustomer, loadInventoryPolicy, requestDiscountApproval, loadDiscountApproval, listPendingDiscountApprovals, decideDiscountApproval,
+  describeUnitError, formatDateTime, paymentLabel, trackingModeOf, PAYMENT_METHODS, UNIT_STATUS_LABEL,
+  type ScannedUnit, type QuotedProduct, type PaymentMethod, type PosSaleListItem, type PosSaleResult, type UnitStatus,
+  type CounterCustomer, type DiscountApproval, type GrnProductOption, type PosItemInput,
 } from '@/lib/admin/units'
 
 const INPUT =
@@ -41,26 +43,53 @@ function beep(ok: boolean) {
   } catch { /* sound is a nicety */ }
 }
 
+/** A bill line: one scanned unit, or a quantity of a quantity-tracked item. */
+type CartLine =
+  | { kind: 'unit'; key: string; unit: ScannedUnit }
+  | { kind: 'quantity'; key: string; item: QuotedProduct; quantity: number }
+
+function lineCents(line: CartLine): number {
+  return line.kind === 'unit' ? line.unit.price_cents ?? 0 : (line.item.price_cents ?? 0) * line.quantity
+}
+
 /**
  * Shop counter (POS). Scan each item's barcode label — or its box IMEI — and
- * those exact units are sold when the bill is completed. Prices come from the
- * database, never from this screen.
+ * those exact units are sold when the bill is completed; quantity-tracked items
+ * are picked from the product list. Prices come from the database at the served
+ * customer's tier, and the database enforces the discount limit: this screen only
+ * explains it.
  */
 export default function AdminPosPage() {
   const { role } = useAdminAuth()
   const { settings } = useStoreSettings()
   const allowed = canSell(role)
+  const isAdmin = canReceiveStock(role)
   const cameraOk = useSyncExternalStore(noop, cameraScanSupported, () => false)
 
   const [requestId, setRequestId] = useState(newRequestId)
-  const [cart, setCart] = useState<ScannedUnit[]>([])
+  const [cart, setCart] = useState<CartLine[]>([])
   const [code, setCode] = useState('')
   const [scanning, setScanning] = useState(false)
   const [scanError, setScanError] = useState<string | null>(null)
   const [camera, setCamera] = useState(false)
 
+  const [products, setProducts] = useState<GrnProductOption[]>([])
+  const [pickProduct, setPickProduct] = useState('')
+  const [pickVariant, setPickVariant] = useState('')
+  const [pickQty, setPickQty] = useState('1')
+
+  const [customerQuery, setCustomerQuery] = useState('')
+  const [customer, setCustomer] = useState<CounterCustomer | null>(null)
+  const [customerMatches, setCustomerMatches] = useState<CounterCustomer[] | null>(null)
+
+  const [staffMaxBps, setStaffMaxBps] = useState<number>(0)
+  const [approval, setApproval] = useState<DiscountApproval | null>(null)
+  const [approvalReason, setApprovalReason] = useState('')
+  const [pending, setPending] = useState<DiscountApproval[]>([])
+
   const [discount, setDiscount] = useState('')
   const [payment, setPayment] = useState<PaymentMethod>('cash')
+  const [paymentReference, setPaymentReference] = useState('')
   const [customerName, setCustomerName] = useState('')
   const [customerPhone, setCustomerPhone] = useState('')
   const [note, setNote] = useState('')
@@ -75,6 +104,8 @@ export default function AdminPosPage() {
   const scanRef = useRef<HTMLInputElement>(null)
   const cartRef = useRef(cart)
   useEffect(() => { cartRef.current = cart }, [cart])
+  const customerRef = useRef<string | null>(null)
+  useEffect(() => { customerRef.current = customer?.profileId ?? null }, [customer])
 
   const refreshSales = useCallback(() => {
     listPosSales()
@@ -87,37 +118,143 @@ export default function AdminPosPage() {
     listPosSales()
       .then((rows) => { if (!cancelled) setSales(rows) })
       .catch((err) => { if (!cancelled) setSalesError(describeUnitError(err, 'Could not load recent bills.')) })
+    listProductsForGrn().then((p) => { if (!cancelled) setProducts(p.filter((x) => x.isActive)) }).catch(() => {})
+    loadInventoryPolicy().then((p) => { if (!cancelled) setStaffMaxBps(p.staffMaxDiscountBps) }).catch(() => {})
     return () => { cancelled = true }
   }, [])
 
-  const subtotal = cart.reduce((sum, u) => sum + (u.price_cents ?? 0), 0)
+  // Owner/admin: discount requests waiting for a decision.
+  const refreshPending = useCallback(() => {
+    listPendingDiscountApprovals().then(setPending).catch(() => {})
+  }, [])
+  useEffect(() => {
+    if (!isAdmin) return
+    let cancelled = false
+    const tick = () => { listPendingDiscountApprovals().then((rows) => { if (!cancelled) setPending(rows) }).catch(() => {}) }
+    tick()
+    const timer = window.setInterval(tick, 15_000)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  }, [isAdmin])
+
+  // Cashier: waits for the decision on this bill's request.
+  const approvalId = approval?.status === 'pending' ? approval.id : null
+  useEffect(() => {
+    if (!approvalId) return
+    const timer = window.setInterval(() => {
+      loadDiscountApproval(approvalId).then(setApproval).catch(() => {})
+    }, 5_000)
+    return () => window.clearInterval(timer)
+  }, [approvalId])
+
+  const subtotal = cart.reduce((sum, l) => sum + lineCents(l), 0)
   const discountCents = parseRupees(discount)
   const total = subtotal - (discountCents ?? 0)
+  const items: PosItemInput[] = cart.map((l) => (l.kind === 'unit'
+    ? { code: l.unit.barcode }
+    : { product_id: l.item.product_id, variant_id: l.item.variant_id, quantity: l.quantity }))
+  const customerId = customer?.profileId ?? null
+  // Mirrors the check inside pos_create_sale so the cashier can ask before trying.
+  const needsApproval = !isAdmin && (discountCents ?? 0) > 0 && (discountCents ?? 0) * 10000 > subtotal * staffMaxBps
+  const approvalUsable = approval?.status === 'approved' && approval.requestedCents >= (discountCents ?? 0) && approval.subtotalCents === subtotal
+
+  /** Any change to the bill invalidates an approval, which is bound to that bill. */
+  function billChanged() {
+    setApproval(null)
+    setSaleError(null)
+  }
+
+  async function findCustomer() {
+    setSaleError(null)
+    try {
+      const matches = await findCounterCustomer(customerQuery)
+      setCustomerMatches(matches)
+    } catch (err) {
+      setSaleError(describeUnitError(err, 'That customer could not be looked up.'))
+    }
+  }
+
+  const pickedProduct = products.find((p) => p.id === pickProduct)
+
+  async function addQuantityItem() {
+    if (!pickedProduct) { setScanError('Choose a product.'); return }
+    if (pickedProduct.variants.length > 0 && !pickVariant) { setScanError('Choose the variant.'); return }
+    const qty = Number(pickQty)
+    if (!Number.isInteger(qty) || qty < 1) { setScanError('Quantity must be a whole number.'); return }
+    if (cart.some((l) => l.kind === 'quantity' && l.item.product_id === pickProduct && (l.item.variant_id ?? '') === pickVariant)) {
+      setScanError('That item is already on this bill. Remove it to change the quantity.')
+      return
+    }
+    setScanError(null)
+    setDone(null)
+    setScanning(true)
+    try {
+      const item = await quoteProduct(pickProduct, pickVariant || null, customerId)
+      if (item.tracking_mode === 'unit') setScanError(`${item.product_name} is tracked individually. Scan its barcode or IMEI.`)
+      else if (item.price_cents === null) setScanError(`${item.product_name} has no price. Set one in Pricing first.`)
+      else if (qty > item.available) setScanError(`Only ${item.available} of ${item.product_name} available.`)
+      else {
+        setCart((prev) => [...prev, { kind: 'quantity', key: `${pickProduct}|${pickVariant}`, item, quantity: qty }])
+        billChanged()
+        setPickProduct('')
+        setPickVariant('')
+        setPickQty('1')
+        beep(true)
+      }
+    } catch (err) {
+      setScanError(describeUnitError(err, 'That item could not be priced.'))
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  async function askForApproval() {
+    if (discountCents === null || discountCents <= 0) return
+    if (approvalReason.trim().length < 3) { setSaleError('Give a reason for the discount.'); return }
+    setSaleError(null)
+    try {
+      const id = await requestDiscountApproval({
+        saleRequestId: requestId, items, customerProfileId: customerId, discountCents, reason: approvalReason.trim(),
+      })
+      setApproval(await loadDiscountApproval(id))
+    } catch (err) {
+      setSaleError(describeUnitError(err, 'The request could not be sent.'))
+    }
+  }
+
+  async function decide(id: string, approve: boolean) {
+    try {
+      await decideDiscountApproval(id, approve, '')
+    } catch (err) {
+      setSaleError(describeUnitError(err, 'The decision was not saved.'))
+    }
+    refreshPending()
+  }
 
   const addCode = useCallback(async (raw: string) => {
     const value = normalizeCode(raw)
     if (!value) return
     setScanError(null)
     setDone(null)
-    if (cartRef.current.some((u) => u.barcode === value || u.serial_number === value)) {
+    if (cartRef.current.some((l) => l.kind === 'unit' && (l.unit.barcode === value || l.unit.serial_number === value))) {
       setScanError(`${value} is already on this bill.`)
       beep(false)
       return
     }
     setScanning(true)
     try {
-      const unit = await lookupUnit(value)
-      if (cartRef.current.some((u) => u.unit_id === unit.unit_id)) {
+      const unit = await lookupUnit(value, customerRef.current)
+      if (cartRef.current.some((l) => l.kind === 'unit' && l.unit.unit_id === unit.unit_id)) {
         setScanError(`${unit.barcode} is already on this bill.`)
         beep(false)
       } else if (unit.status !== 'in_stock') {
         setScanError(`${unit.barcode} (${unit.product_name}) is ${UNIT_STATUS_LABEL[unit.status as UnitStatus]?.toLowerCase() ?? unit.status} — it cannot be sold.`)
         beep(false)
       } else if (unit.price_cents === null) {
-        setScanError(`${unit.product_name} has no retail price. Set a price in Pricing first.`)
+        setScanError(`${unit.product_name} has no price. Set a price in Pricing first.`)
         beep(false)
       } else {
-        setCart((prev) => [...prev, unit])
+        setCart((prev) => [...prev, { kind: 'unit', key: unit.unit_id, unit }])
+        setApproval(null)
         beep(true)
       }
     } catch (err) {
@@ -134,6 +271,12 @@ export default function AdminPosPage() {
     setCart([])
     setDiscount('')
     setPayment('cash')
+    setPaymentReference('')
+    setCustomer(null)
+    setCustomerQuery('')
+    setCustomerMatches(null)
+    setApproval(null)
+    setApprovalReason('')
     setCustomerName('')
     setCustomerPhone('')
     setNote('')
@@ -147,15 +290,19 @@ export default function AdminPosPage() {
     if (cart.length === 0) { setSaleError('Scan at least one item.'); return }
     if (discountCents === null) { setSaleError('The discount must be an amount in rupees.'); return }
     if (discountCents > subtotal) { setSaleError('The discount cannot be more than the subtotal.'); return }
+    if (needsApproval && !approvalUsable) { setSaleError('This discount needs an owner or admin to approve it first.'); return }
     setBusy(true)
     setSaleError(null)
     try {
       const result = await createPosSale({
-        codes: cart.map((u) => u.barcode),
+        items,
         paymentMethod: payment,
+        paymentReference: paymentReference.trim(),
         discountCents,
-        customerName: customerName.trim(),
-        customerPhone: customerPhone.trim(),
+        customerName: customerName.trim() || (customer?.fullName ?? ''),
+        customerPhone: customerPhone.trim() || (customer?.phone ?? ''),
+        customerProfileId: customerId,
+        discountApprovalId: needsApproval ? approval?.id ?? null : null,
         note: note.trim(),
         requestId,
       })
@@ -179,7 +326,7 @@ export default function AdminPosPage() {
         phone: settings.contact_phone,
         address: settings.address,
       })
-      openPdf(blob, `${detail.sale.bill_number}.pdf`)
+      await openPdf(blob, `${detail.sale.bill_number}.pdf`)
     } catch (err) {
       setSalesError(describeUnitError(err, 'The bill could not be printed.'))
     } finally {
@@ -199,7 +346,28 @@ export default function AdminPosPage() {
   return (
     <>
       <AdminPageHeading title="Shop counter (POS)"
-        subtitle="Scan each item's barcode label or box IMEI. Completing the bill sells exactly those items and lowers stock." />
+        subtitle="Scan each item's barcode label or box IMEI, or pick quantity items below. Completing the bill sells exactly those items and lowers stock." />
+
+      {isAdmin && pending.length > 0 && (
+        <section className="mb-4 space-y-2.5 rounded-[22px] border border-amber-500/30 bg-amber-500/8 p-4">
+          <h2 className="text-[14px] font-bold text-foreground">Discount requests</h2>
+          {pending.map((a) => (
+            <div key={a.id} className="flex flex-wrap items-center justify-between gap-2 text-[13px]">
+              <span className="min-w-0">
+                <span className="block font-semibold tabular-nums">
+                  {formatPrice(centsToRupees(a.requestedCents))} off {formatPrice(centsToRupees(a.subtotalCents))}
+                  {a.requestedByName ? ` · ${a.requestedByName}` : ''}
+                </span>
+                <span className="block text-[11.5px] text-muted-foreground">{a.reason}</span>
+              </span>
+              <span className="flex gap-1.5">
+                <Button size="sm" variant="secondary" onClick={() => void decide(a.id, false)}><X size={14} className="mr-1" /> Reject</Button>
+                <Button size="sm" onClick={() => void decide(a.id, true)}><Check size={14} className="mr-1" /> Approve</Button>
+              </span>
+            </div>
+          ))}
+        </section>
+      )}
 
       <div className="grid gap-5 lg:grid-cols-[1fr_360px]">
         {/* Scan + cart */}
@@ -222,6 +390,30 @@ export default function AdminPosPage() {
           </form>
 
           {camera && <CameraScanner onCode={(c) => void addCode(c)} onClose={() => setCamera(false)} />}
+
+          {/* Quantity-tracked items have no label to scan. */}
+          <div className="rounded-[22px] border border-mint/80 dark:border-border bg-surface p-3.5 shadow-card space-y-2.5">
+            <p className="text-[13px] font-semibold">Add by product</p>
+            <div className="grid gap-2 sm:grid-cols-[1fr_1fr_90px_auto]">
+              <select aria-label="Product" className={cn(SELECT_CLASS, 'w-full')} value={pickProduct} disabled={busy}
+                onChange={(e) => { setPickProduct(e.target.value); setPickVariant('') }}>
+                <option value="">Choose a product…</option>
+                {products.filter((p) => p.variants.length > 0 ? p.variants.some((v) => trackingModeOf(p, v.id) === 'quantity') : p.trackingMode === 'quantity')
+                  .map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <select aria-label="Variant" className={cn(SELECT_CLASS, 'w-full')} value={pickVariant} disabled={busy || !pickedProduct?.variants.length}
+                onChange={(e) => setPickVariant(e.target.value)}>
+                <option value="">{pickedProduct?.variants.length ? 'Choose a variant…' : 'No variants'}</option>
+                {pickedProduct?.variants.filter((v) => v.trackingMode === 'quantity').map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+              <input type="number" inputMode="numeric" min={1} aria-label="Quantity" className={cn(INPUT, 'tabular-nums')} value={pickQty} disabled={busy}
+                onChange={(e) => setPickQty(e.target.value)} />
+              <Button type="button" variant="secondary" disabled={busy || scanning || !pickProduct} onClick={() => void addQuantityItem()}>
+                <Plus size={15} className="mr-1" /> Add
+              </Button>
+            </div>
+          </div>
+
           {scanError && <ErrorNote message={scanError} />}
           {done && (
             <SuccessNote message={done.replayed
@@ -234,23 +426,27 @@ export default function AdminPosPage() {
               <p className="px-6 py-12 text-center text-sm text-muted-foreground">No items yet — scan the first one.</p>
             ) : (
               <ul className="divide-y divide-mint/50 dark:divide-border/70">
-                {cart.map((u, i) => (
-                  <li key={u.unit_id} className="flex items-center gap-3 px-4 py-3">
-                    <span className="w-6 shrink-0 text-[12px] text-muted-foreground tabular-nums">{i + 1}</span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block font-semibold text-foreground truncate">{u.product_name}</span>
-                      <span className="block text-[11.5px] text-muted-foreground truncate">
-                        {[u.variant_name, u.barcode, u.serial_number].filter(Boolean).join(' · ')}
+                {cart.map((l, i) => {
+                  const name = l.kind === 'unit' ? l.unit.product_name : l.item.product_name
+                  const detail = l.kind === 'unit'
+                    ? [l.unit.variant_name, l.unit.barcode, l.unit.serial_number].filter(Boolean).join(' · ')
+                    : [l.item.variant_name, `${l.quantity} × ${formatPrice(centsToRupees(l.item.price_cents ?? 0))}`].filter(Boolean).join(' · ')
+                  return (
+                    <li key={l.key} className="flex items-center gap-3 px-4 py-3">
+                      <span className="w-6 shrink-0 text-[12px] text-muted-foreground tabular-nums">{i + 1}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block font-semibold text-foreground truncate">{name}</span>
+                        <span className="block text-[11.5px] text-muted-foreground truncate">{detail}</span>
                       </span>
-                    </span>
-                    <span className="shrink-0 font-semibold tabular-nums">{formatPrice(centsToRupees(u.price_cents ?? 0))}</span>
-                    <button type="button" aria-label={`Remove ${u.barcode}`} disabled={busy}
-                      onClick={() => setCart((prev) => prev.filter((x) => x.unit_id !== u.unit_id))}
-                      className="focus-ring flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-red-500/10 hover:text-red-500">
-                      <Trash2 size={15} />
-                    </button>
-                  </li>
-                ))}
+                      <span className="shrink-0 font-semibold tabular-nums">{formatPrice(centsToRupees(lineCents(l)))}</span>
+                      <button type="button" aria-label={`Remove ${name}`} disabled={busy}
+                        onClick={() => { setCart((prev) => prev.filter((x) => x.key !== l.key)); billChanged() }}
+                        className="focus-ring flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-red-500/10 hover:text-red-500">
+                        <Trash2 size={15} />
+                      </button>
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </div>
@@ -258,12 +454,60 @@ export default function AdminPosPage() {
 
         {/* Payment */}
         <aside className="h-fit space-y-3 rounded-[26px] border border-mint/80 dark:border-border bg-surface p-5 shadow-card lg:sticky lg:top-4">
+          {/* The price tier is decided by the account: it must be chosen before scanning. */}
+          <div className="space-y-2 border-b border-mint/70 dark:border-border pb-3">
+            <span className="flex items-center gap-1.5 text-[13px] font-semibold"><UserRound size={14} /> Customer account</span>
+            {customer ? (
+              <div className="flex items-center justify-between gap-2 text-[13px]">
+                <span className="min-w-0">
+                  <span className="block truncate font-semibold">{customer.fullName ?? customer.phone}</span>
+                  <span className="block text-[11.5px] text-muted-foreground">{customer.tierCode === 'wholesale_vip' ? 'Wholesale prices' : 'Retail prices'}</span>
+                </span>
+                {cart.length === 0 && <Button size="sm" variant="ghost" onClick={() => { setCustomer(null); setCustomerMatches(null) }}>Remove</Button>}
+              </div>
+            ) : cart.length > 0 ? (
+              <p className="text-[12px] text-muted-foreground">Walk-in, retail prices. Clear the bill to serve an account.</p>
+            ) : (
+              <>
+                <div className="flex gap-2">
+                  <input className={INPUT} inputMode="tel" placeholder="Phone (optional)" aria-label="Find customer by phone" value={customerQuery}
+                    onChange={(e) => { setCustomerQuery(e.target.value); setCustomerMatches(null) }} />
+                  <Button type="button" variant="secondary" disabled={customerQuery.trim().length < 9} onClick={() => void findCustomer()}>Find</Button>
+                </div>
+                {customerMatches?.length === 0 && <p className="text-[12px] text-muted-foreground">No account with that phone. The sale stays at retail prices.</p>}
+                {customerMatches?.map((m) => (
+                  <button key={m.profileId} type="button" onClick={() => { setCustomer(m); setCustomerMatches(null) }}
+                    className="focus-ring block w-full rounded-xl border border-mint-deep dark:border-border px-3 py-2 text-left text-[13px] hover:bg-primary-soft/60">
+                    <span className="block font-semibold">{m.fullName ?? m.phone}</span>
+                    <span className="block text-[11.5px] text-muted-foreground">{m.tierCode === 'wholesale_vip' ? 'Wholesale prices' : 'Retail prices'}</span>
+                  </button>
+                ))}
+              </>
+            )}
+          </div>
           <div className="flex justify-between text-sm"><span className="text-muted-foreground">Subtotal ({cart.length})</span><span className="tabular-nums">{formatPrice(centsToRupees(subtotal))}</span></div>
           <label className="block">
             <span className="mb-1.5 block text-[13px] font-semibold">Discount (Rs.)</span>
             <input inputMode="decimal" className={cn(INPUT, 'tabular-nums')} placeholder="0" value={discount} disabled={busy}
-              onChange={(e) => { setDiscount(e.target.value); setSaleError(null) }} />
+              onChange={(e) => { setDiscount(e.target.value); billChanged() }} />
           </label>
+          {needsApproval && !approvalUsable && (
+            <div className="space-y-2 rounded-2xl border border-amber-500/30 bg-amber-500/8 p-3">
+              <p className="text-[12.5px]">
+                {approval?.status === 'pending' ? 'Waiting for an owner or admin to decide…'
+                  : approval?.status === 'rejected' ? `Rejected${approval.decisionNote ? `: ${approval.decisionNote}` : ''}. Change the discount or ask again.`
+                  : staffMaxBps > 0 ? `Above your limit of ${staffMaxBps / 100}%. An owner or admin must approve this discount for this bill.`
+                  : 'An owner or admin must approve this discount for this bill.'}
+              </p>
+              {approval?.status !== 'pending' && (
+                <>
+                  <input className={INPUT} placeholder="Reason" aria-label="Reason for the discount" value={approvalReason} onChange={(e) => setApprovalReason(e.target.value)} />
+                  <Button fullWidth size="sm" variant="secondary" disabled={cart.length === 0} onClick={() => void askForApproval()}>Request approval</Button>
+                </>
+              )}
+            </div>
+          )}
+          {needsApproval && approvalUsable && <p className="text-[12.5px] font-semibold text-primary">Discount approved for this bill.</p>}
           <div className="flex items-baseline justify-between border-t border-mint/70 dark:border-border pt-3">
             <span className="font-bold">Total</span>
             <span className="text-2xl font-bold tabular-nums">{formatPrice(centsToRupees(Math.max(total, 0)))}</span>
@@ -274,6 +518,9 @@ export default function AdminPosPage() {
               {PAYMENT_METHODS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
             </select>
           </label>
+          {payment !== 'cash' && (
+            <input className={INPUT} placeholder="Payment reference (optional)" value={paymentReference} disabled={busy} onChange={(e) => setPaymentReference(e.target.value)} />
+          )}
           <input className={INPUT} placeholder="Customer name (optional)" value={customerName} disabled={busy} onChange={(e) => setCustomerName(e.target.value)} />
           <input className={INPUT} inputMode="tel" placeholder="Customer phone (optional)" value={customerPhone} disabled={busy} onChange={(e) => setCustomerPhone(e.target.value)} />
           <input className={INPUT} placeholder="Note (optional)" value={note} disabled={busy} onChange={(e) => setNote(e.target.value)} />
@@ -316,7 +563,7 @@ export default function AdminPosPage() {
                     <td className="px-4 py-3 text-right tabular-nums">{s.itemCount}</td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
                       <span className="block font-semibold tabular-nums">{formatPrice(centsToRupees(s.total_cents))}</span>
-                      <span className="block text-[11px] text-muted-foreground">{paymentLabel(s.payment_method)}</span>
+                      <span className="block text-[11px] text-muted-foreground">{paymentLabel(s.payment_method)}{s.tier_code === 'wholesale_vip' ? ' · Wholesale' : ''}</span>
                     </td>
                     <td className="px-4 py-3 text-right">
                       <Button size="sm" variant="secondary" disabled={printing === s.id} onClick={() => void printBill(s.id)}>

@@ -11,12 +11,12 @@ import { GrnDetail } from '@/components/admin/inventory/GrnDetail'
 import { ErrorNote, TH, TABLE_CARD } from '@/components/admin/inventory/shared'
 import { useAdminAuth } from '@/context/AdminAuthContext'
 import {
-  listGrns, listProductsForGrn, canReceiveStock, describeUnitError, formatDate,
-  type GrnListItem, type GrnProductOption, type GrnResult,
+  listGrns, listProductsForGrn, canReceiveStock, describeUnitError, formatDate, loadCosts,
+  type CostRow, type GrnListItem, type GrnProductOption,
 } from '@/lib/admin/units'
 import {
   listSuppliers, listPurchaseOrders, isPoReceivable,
-  type SupplierRow, type PurchaseOrderListItem,
+  type SupplierRow, type PurchaseOrderListItem, type GrnResult,
 } from '@/lib/admin/purchasing'
 
 type Load = { kind: 'loading' } | { kind: 'ready' } | { kind: 'error'; message: string }
@@ -30,13 +30,19 @@ export default function AdminGrnPage() {
   const [products, setProducts] = useState<GrnProductOption[]>([])
   const [suppliers, setSuppliers] = useState<SupplierRow[]>([])
   const [pos, setPos] = useState<PurchaseOrderListItem[]>([])
+  const [costs, setCosts] = useState<Map<string, CostRow>>(new Map())
   const [query, setQuery] = useState('')
   const [creating, setCreating] = useState(false)
   const [open, setOpen] = useState<{ id: string; notice: string | null } | null>(null)
 
-  const fetchAll = useCallback(() => Promise.all([listGrns(), listProductsForGrn(), listSuppliers(), listPurchaseOrders()]), [])
-  const apply = useCallback(([g, p, s, o]: [GrnListItem[], GrnProductOption[], SupplierRow[], PurchaseOrderListItem[]]) => {
-    setGrns(g); setProducts(p); setSuppliers(s); setPos(o.filter((po) => isPoReceivable(po.status))); setLoad({ kind: 'ready' })
+  const fetchAll = useCallback(async () => {
+    const [g, p, s, o] = await Promise.all([listGrns(), listProductsForGrn(), listSuppliers(), listPurchaseOrders()])
+    // Money comes separately: staff are refused it by the database.
+    const c = canPost ? await loadCosts('grn', g.map((x) => x.id)) : new Map<string, CostRow>()
+    return [g, p, s, o, c] as const
+  }, [canPost])
+  const apply = useCallback(([g, p, s, o, c]: readonly [GrnListItem[], GrnProductOption[], SupplierRow[], PurchaseOrderListItem[], Map<string, CostRow>]) => {
+    setGrns(g); setProducts(p); setSuppliers(s); setPos(o.filter((po) => isPoReceivable(po.status))); setCosts(c); setLoad({ kind: 'ready' })
   }, [])
 
   const refresh = useCallback(() => {
@@ -65,7 +71,7 @@ export default function AdminGrnPage() {
       id: result.id,
       notice: result.replayed
         ? `${result.grn_number} had already been posted — nothing was received twice.`
-        : `${result.grn_number} posted: ${result.total_units} unit${result.total_units === 1 ? '' : 's'} received, each with its own barcode. Print the labels below.`,
+        : `${result.grn_number} posted: ${result.total_units} accepted${result.rejected_units > 0 ? `, ${result.rejected_units} rejected` : ''}. Print any barcode labels below.`,
     })
     refresh()
   }
@@ -74,7 +80,7 @@ export default function AdminGrnPage() {
     <>
       <div className="flex flex-col sm:flex-row sm:items-start gap-3">
         <AdminPageHeading className="flex-1" title="Good Receive Notice"
-          subtitle="Record every delivery. Each item received gets its own barcode label, and stock rises automatically." />
+          subtitle="Record every delivery: what arrived, what you accepted and what you refused. Accepted items enter stock automatically." />
         {canPost && (
           <Button onClick={() => setCreating(true)} disabled={load.kind !== 'ready'}>
             <Plus size={16} className="mr-1.5" /> New GRN
@@ -83,7 +89,7 @@ export default function AdminGrnPage() {
       </div>
 
       {!canPost && (
-        <p className="mb-4 text-[12.5px] text-muted-foreground">You can view GRNs and print labels. Posting a GRN needs an owner or admin.</p>
+        <p className="mb-4 text-[12.5px] text-muted-foreground">You can view GRNs and print labels. Posting a GRN and seeing its costs needs an owner or admin.</p>
       )}
 
       <div className="relative mb-4">
@@ -126,8 +132,8 @@ export default function AdminGrnPage() {
                 <tr className="border-b border-mint/70 dark:border-border bg-muted/60">
                   <th scope="col" className={TH}>GRN</th>
                   <th scope="col" className={TH}>Supplier</th>
-                  <th scope="col" className={`${TH} text-right`}>Units</th>
-                  <th scope="col" className={`${TH} text-right`}>Cost</th>
+                  <th scope="col" className={`${TH} text-right`}>Accepted</th>
+                  {canPost && <th scope="col" className={`${TH} text-right`}>Cost</th>}
                   <th scope="col" className="px-4 py-3" />
                 </tr>
               </thead>
@@ -142,10 +148,18 @@ export default function AdminGrnPage() {
                       <span className="block text-foreground">{g.supplier_name}</span>
                       {g.supplier_invoice && <span className="block text-[11px] text-muted-foreground">Invoice {g.supplier_invoice}</span>}
                     </td>
-                    <td className="px-4 py-3 text-right tabular-nums">{g.total_units}</td>
-                    <td className="px-4 py-3 text-right tabular-nums whitespace-nowrap">{formatPrice(centsToRupees(g.total_cost_cents))}</td>
+                    <td className="px-4 py-3 text-right tabular-nums">
+                      {g.total_units}
+                      {g.rejected_units > 0 && <span className="block text-[11px] text-muted-foreground">{g.rejected_units} rejected</span>}
+                    </td>
+                    {canPost && (
+                      <td className="px-4 py-3 text-right tabular-nums whitespace-nowrap">
+                        {formatPrice(centsToRupees(costs.get(g.id)?.cents ?? 0))}
+                        {costs.get(g.id)?.pending && <span className="block text-[11px] font-semibold text-amber-600 dark:text-amber-400">cost pending</span>}
+                      </td>
+                    )}
                     <td className="px-4 py-3 text-right whitespace-nowrap">
-                      <Button size="sm" variant="secondary" onClick={() => setOpen({ id: g.id, notice: null })}>View & labels</Button>
+                      <Button size="sm" variant="secondary" onClick={() => setOpen({ id: g.id, notice: null })}>{g.unitCount > 0 ? 'View & Labels' : 'View'}</Button>
                     </td>
                   </tr>
                 ))}
@@ -156,7 +170,7 @@ export default function AdminGrnPage() {
       )}
 
       {creating && <GrnCreator products={products} suppliers={suppliers} purchaseOrders={pos} onClose={() => setCreating(false)} onPosted={onPosted} />}
-      {open && <GrnDetail key={open.id} grnId={open.id} justPosted={open.notice} onClose={() => setOpen(null)} />}
+      {open && <GrnDetail key={open.id} grnId={open.id} showMoney={canPost} justPosted={open.notice} onClose={() => setOpen(null)} onChanged={refresh} />}
     </>
   )
 }

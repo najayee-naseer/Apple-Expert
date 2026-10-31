@@ -46,6 +46,11 @@ export interface ProductVariant {
   colorCode?: string
   storage?: string
   /**
+   * What can be bought of this exact variant now (stock minus online holds). The
+   * database enforces it again at checkout. undefined until live data loads.
+   */
+  available?: number
+  /**
    * This variant's own condition (product_conditions row for the variant).
    * 'brand_new' when it has no row; undefined until live data loads. A variant
    * never takes its condition from the product.

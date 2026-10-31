@@ -24,7 +24,7 @@ import {
 } from '@/lib/admin/warranty'
 import { productImageUrl, warrantyNoun } from '@/lib/catalog'
 import { describeAdminError } from '@/lib/admin/errors'
-import { listMovements, reasonLabel, MOVEMENT_LIMIT, type MovementRow, type StockResult } from '@/lib/admin/inventory'
+import { listMovements, reasonLabel, setTrackingMode, describeStockError, MOVEMENT_LIMIT, type MovementRow, type StockResult } from '@/lib/admin/inventory'
 import { confirmAdjustment } from '@/lib/admin/stockFlow'
 import { StockAdjustDialog } from './StockAdjustDialog'
 import {
@@ -135,6 +135,7 @@ export function ProductEditor({ productId, categories, canEdit, onClose, onSaved
   const [movements, setMovements] = useState<(MovementRow & { actorName: string | null })[]>([])
   const [movementsError, setMovementsError] = useState<string | null>(null)
   const [adjusting, setAdjusting] = useState<{ variantId: string | null; label: string; current: number } | null>(null)
+  const [modeChange, setModeChange] = useState<{ variantId: string | null; label: string; to: 'quantity' | 'unit' } | null>(null)
   // After an ACCEPTED adjustment: the confirmation, and a refresh problem kept
   // apart from rowError so it can never read as the change being refused.
   const [stockNotice, setStockNotice] = useState<string | null>(null)
@@ -451,6 +452,7 @@ export function ProductEditor({ productId, categories, canEdit, onClose, onSaved
   // Stock as recorded, and what the database will refuse to delete: anything
   // holding stock, and anything with stock history (the ledger keeps it).
   const productStock = detail?.product.stock ?? 0
+  const productMode = detail?.product.tracking_mode === 'unit' ? 'unit' : 'quantity'
   const variantRows = detail?.variants ?? []
   const sharedVariants = variantRows.filter((v) => v.stock === null).length
   const variantsWithHistory = new Set(movements.map((m) => m.variant_id).filter(Boolean))
@@ -584,13 +586,24 @@ export function ProductEditor({ productId, categories, canEdit, onClose, onSaved
                       <p className="text-[12px] text-muted-foreground">{hasVariants ? 'Product stock' : 'In stock'}</p>
                       <p className="text-2xl font-bold tabular-nums tracking-tight text-foreground">{productStock}</p>
                     </div>
-                    {canEdit && (
+                    {canEdit && productMode === 'quantity' && (
                       <Button type="button" variant="outline" size="sm" disabled={rowBusy}
                         onClick={() => setAdjusting({ variantId: null, label: detail.product.name, current: productStock })}>
                         Adjust stock
                       </Button>
                     )}
+                    {canEdit && (
+                      <Button type="button" variant="ghost" size="sm" disabled={rowBusy}
+                        onClick={() => setModeChange({ variantId: null, label: detail.product.name, to: productMode === 'unit' ? 'quantity' : 'unit' })}>
+                        {productMode === 'unit' ? 'Track by quantity' : 'Track individually'}
+                      </Button>
+                    )}
                   </div>
+                  <p className="text-[12.5px] leading-snug text-muted-foreground">
+                    {productMode === 'unit'
+                      ? 'Tracked item by item: stock comes in through a GRN and leaves by sale, return or write-off.'
+                      : 'Tracked by quantity: a number, with no barcode per item.'}
+                  </p>
                   {hasVariants && (
                     <p className="text-[12.5px] leading-snug text-muted-foreground">
                       {sharedVariants === variantRows.length
@@ -769,13 +782,26 @@ export function ProductEditor({ productId, categories, canEdit, onClose, onSaved
                                         ? <>Shares product stock <span className="tabular-nums text-muted-foreground">({productStock})</span></>
                                         : <>Own stock: <strong className="tabular-nums">{own}</strong></>}
                                     </span>
-                                    {canEdit && own !== null && (
-                                      <button type="button" disabled={rowBusy}
-                                        onClick={() => setAdjusting({ variantId: variant.id, label: variant.name, current: own })}
-                                        className="focus-ring rounded-full text-[12px] font-semibold text-primary disabled:opacity-50">
-                                        Adjust
-                                      </button>
-                                    )}
+                                    {canEdit && own !== null && (() => {
+                                      const row = variantRows.find((v) => v.id === variant.id)
+                                      const mode = row?.tracking_mode === 'unit' || row?.tracking_mode === 'quantity' ? row.tracking_mode : productMode
+                                      return (
+                                        <>
+                                          {mode === 'quantity' && (
+                                            <button type="button" disabled={rowBusy}
+                                              onClick={() => setAdjusting({ variantId: variant.id, label: variant.name, current: own })}
+                                              className="focus-ring rounded-full text-[12px] font-semibold text-primary disabled:opacity-50">
+                                              Adjust
+                                            </button>
+                                          )}
+                                          <button type="button" disabled={rowBusy}
+                                            onClick={() => setModeChange({ variantId: variant.id, label: variant.name, to: mode === 'unit' ? 'quantity' : 'unit' })}
+                                            className="focus-ring rounded-full text-[12px] font-semibold text-primary disabled:opacity-50">
+                                            {mode === 'unit' ? 'Track by quantity' : 'Track individually'}
+                                          </button>
+                                        </>
+                                      )
+                                    })()}
                                   </div>
                                 </div>
                               )
@@ -1073,6 +1099,16 @@ export function ProductEditor({ productId, categories, canEdit, onClose, onSaved
           )}
         </div>
 
+        {modeChange && detail && (
+          <TrackingModeDialog
+            productId={detail.product.id}
+            variantId={modeChange.variantId}
+            label={modeChange.label}
+            to={modeChange.to}
+            onClose={() => setModeChange(null)}
+            onDone={() => { setModeChange(null); void reload().then(() => onSaved()) }}
+          />
+        )}
         {adjusting && detail && (
           <StockAdjustDialog
             productId={detail.product.id}
@@ -1168,6 +1204,58 @@ export function ProductEditor({ productId, categories, canEdit, onClose, onSaved
             </Button>
           </div>
         </footer>
+      </div>
+    </div>
+  )
+}
+
+/** Switching mode needs a counted zero: the database refuses while any stock exists. */
+function TrackingModeDialog({ productId, variantId, label, to, onClose, onDone }: {
+  productId: string
+  variantId: string | null
+  label: string
+  to: 'quantity' | 'unit'
+  onClose: () => void
+  onDone: () => void
+}) {
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function submit() {
+    if (note.trim().length < 3) { setError('Add a note of 3 to 500 characters.'); return }
+    setBusy(true)
+    setError(null)
+    try {
+      await setTrackingMode(productId, variantId, to, note.trim())
+      onDone()
+    } catch (err) {
+      setError(describeStockError(err))
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center px-5">
+      <button type="button" aria-label="Cancel" onClick={busy ? undefined : onClose} className="absolute inset-0 bg-black/55 backdrop-blur-[2px]" />
+      <div role="dialog" aria-modal="true" aria-label="Change tracking"
+        className="relative w-full max-w-sm space-y-3.5 rounded-[26px] border border-mint/80 dark:border-border bg-surface p-6 shadow-float">
+        <div>
+          <h3 className="text-lg font-bold tracking-tight">{to === 'unit' ? 'Track individually' : 'Track by quantity'} · {label}</h3>
+          <p className="mt-1 text-[13px] leading-snug text-muted-foreground">
+            {to === 'unit'
+              ? 'Count it first and set its stock to 0. Afterwards receive the counted items with a GRN (Opening stock), so each gets a barcode.'
+              : 'Only possible once no individually tracked unit of it is left in the shop or in quarantine.'}
+          </p>
+        </div>
+        <textarea rows={2} value={note} disabled={busy} onChange={(e) => { setNote(e.target.value); setError(null) }}
+          placeholder="Note (required)"
+          className="focus-ring w-full rounded-xl border border-mint-deep dark:border-border bg-card px-3 py-2.5 text-sm focus:outline-none focus:border-primary/45" />
+        {error && <p role="alert" className="text-[12.5px] text-red-600 dark:text-red-400">{error}</p>}
+        <div className="flex gap-2.5">
+          <Button variant="ghost" fullWidth onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button fullWidth onClick={() => void submit()} disabled={busy}>{busy ? 'Saving…' : 'Confirm'}</Button>
+        </div>
       </div>
     </div>
   )

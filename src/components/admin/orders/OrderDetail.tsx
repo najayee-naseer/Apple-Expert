@@ -15,9 +15,10 @@ import { centsToRupees } from '@/lib/admin/pricing'
 import {
   loadOrderDetail, updateOrderStatus, canManageOrders, canViewPayments,
   ORDER_STATUSES, ORDER_STATUS_LABEL, PAYMENT_STATUS_LABEL, SENSITIVE_STATUSES,
-  isOrderStatus, type AdminOrderDetail, type OrderStatus,
+  isOrderStatus, STOCK_STATE_LABEL, type AdminOrderDetail, type OrderStatus,
 } from '@/lib/admin/orders'
 import type { AdminRole } from '@/lib/admin/roles'
+import { describeUnitError } from '@/lib/admin/units'
 import { OrderUnits } from './OrderUnits'
 
 type Save =
@@ -120,7 +121,7 @@ export function OrderDetail({
         warning: result.eventRecorded ? null : `The status was saved but the history entry failed: ${result.eventError}`,
       })
     } catch (err) {
-      setSave({ kind: 'error', message: err instanceof Error ? err.message : 'The database refused the change.' })
+      setSave({ kind: 'error', message: describeUnitError(err, 'The database refused the change.') })
     }
   }
 
@@ -247,6 +248,16 @@ export function OrderDetail({
                   ))}
                 </ul>
               </Section>
+
+              <div className="rounded-[22px] border border-mint/80 dark:border-border bg-surface px-5 py-3.5 shadow-card text-[13px]">
+                <span className="font-semibold text-foreground">Stock: </span>
+                <span className="text-muted-foreground">{STOCK_STATE_LABEL[detail.order.stock_state] ?? detail.order.stock_state}</span>
+                {detail.order.reservation_expires_at && (
+                  <span className="block text-[12px] text-muted-foreground">
+                    Released automatically on {new Date(detail.order.reservation_expires_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} unless confirmed.
+                  </span>
+                )}
+              </div>
 
               <OrderUnits orderId={detail.order.id} version={detail.order.status} />
 
@@ -381,6 +392,9 @@ export function OrderDetail({
               {detail?.order.order_number} will be set to{' '}
               <strong className="text-foreground">{ORDER_STATUS_LABEL[confirming]}</strong>. The order
               total and the purchased items are not changed, and the transition is recorded in the history.
+              {' '}{detail && ['consumed', 'legacy_done', 'needs_reconciliation'].includes(detail.order.stock_state)
+                ? 'This order has shipped, so stock is not restored and no money moves: record a customer return when the goods come back, and a refund when money goes back.'
+                : 'If it holds stock, that stock is released.'}
             </p>
             <div className="flex gap-2.5">
               <Button variant="ghost" fullWidth onClick={() => setConfirming(null)}>Cancel</Button>

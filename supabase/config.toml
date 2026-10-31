@@ -391,6 +391,12 @@ deno_version = 2
 enabled = true
 verify_jwt = false
 
+# Called by an external scheduler, not a signed-in user: the function itself
+# rejects any request without the shared secret (RESERVATION_EXPIRY_SECRET).
+[functions.expire-reservations]
+enabled = true
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 55327

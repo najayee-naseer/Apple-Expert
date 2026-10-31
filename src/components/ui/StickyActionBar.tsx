@@ -6,11 +6,12 @@ interface StickyActionBarProps {
   price: string
   onAddToCart: () => void
   ctaLabel?: string
+  disabled?: boolean
 }
 
 /** Floats just above the bottom navigation, sharing its geometry tokens so the
  *  two never overlap each other or the page content. */
-export function StickyActionBar({ title, price, onAddToCart, ctaLabel = 'Add to Cart' }: StickyActionBarProps) {
+export function StickyActionBar({ title, price, onAddToCart, ctaLabel = 'Add to Cart', disabled = false }: StickyActionBarProps) {
   return (
     <div
       className="fixed left-3 right-3 z-40 mx-auto w-auto max-w-[456px]"
@@ -30,6 +31,7 @@ export function StickyActionBar({ title, price, onAddToCart, ctaLabel = 'Add to 
           <Button
             className="w-auto px-6 h-11 shrink-0 text-sm bg-gradient-cta-deep hover:bg-gradient-cta-deep-hover shadow-purchase-cta hover:shadow-purchase-cta-hover hover:-translate-y-px active:translate-y-0"
             onClick={onAddToCart}
+            disabled={disabled}
           >
             {ctaLabel}
           </Button>

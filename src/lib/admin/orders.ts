@@ -220,6 +220,18 @@ export async function updateOrderStatus(
   }
 }
 
+/** Staff-facing meaning of orders.stock_state. */
+export const STOCK_STATE_LABEL: Record<string, string> = {
+  reserved: 'Stock held for this order',
+  released: 'Hold released',
+  expired: 'Hold expired after 48 hours',
+  consumed: 'Stock deducted on shipment',
+  legacy_open: 'Placed before reservations: stock is deducted on first shipment',
+  legacy_closed: 'Placed before reservations: closed',
+  legacy_done: 'Shipped before reservations: stock not changed',
+  needs_reconciliation: 'Needs reconciliation: stock could not cover a line when it shipped',
+}
+
 /** Case-insensitive match across the fields the schema actually provides. */
 export function matchesOrderQuery(order: AdminOrderListItem, query: string): boolean {
   const q = query.trim().toLowerCase()

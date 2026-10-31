@@ -1,7 +1,7 @@
 "use client"
 import { formatPrice } from '@/utils/formatPrice'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import Link from 'next/link'
 import { Header } from '@/components/ui/Header'
 import { Button } from '@/components/ui/Button'
@@ -13,7 +13,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Minus, Plus, Trash2, ShoppingBag, Star, Heart, ArrowRight, Box, ShieldCheck, AlertCircle, LoaderCircle, CheckCircle2 } from 'lucide-react'
 import type { CartItem } from '@/types'
 import { ConditionChip } from '@/components/product/ProductConditionWarranty'
-import { placeOrder, type PlacedOrder } from '@/lib/customer/orders'
+import { cartOrderKey, newOrderRequestId, placeOrder, type PlacedOrder } from '@/lib/customer/orders'
 import { centsToRupees, useCatalogProduct } from '@/lib/catalog'
 
 /**
@@ -52,6 +52,8 @@ function CartItemCard({ item }: { item: CartItem }) {
   const liveProduct = useCatalogProduct(item.product.id)
   const liveVariant = item.variant ? liveProduct?.variants?.find((v) => v.id === item.variant!.id) : undefined
   const lineTotal = unitPrice * item.quantity
+  // What can be bought of this exact option right now. undefined until live data loads.
+  const available = liveVariant?.available ?? (item.variant ? undefined : liveProduct?.stock)
   const selection = describeSelection(item)
   const wishlisted = isWishlisted(item.product.id)
   const src = item.product.images[0]
@@ -120,6 +122,13 @@ function CartItemCard({ item }: { item: CartItem }) {
         {/* The line's own variant's condition, read live — never the product's. */}
         <ConditionChip product={liveProduct ?? item.product} variant={liveVariant ?? item.variant} className="mt-1.5" />
 
+        {available !== undefined && available < item.quantity && (
+          <p className="mt-1.5 flex items-center gap-1.5 text-xs text-red-500">
+            <AlertCircle size={13} className="shrink-0" />
+            <span>{available <= 0 ? 'This option is out of stock' : `Only ${available} of this option available`}</span>
+          </p>
+        )}
+
         {warranty && (
           <p className={`mt-1.5 flex items-center gap-1.5 text-xs ${warranty.unavailable ? 'text-red-500' : 'text-muted-foreground'}`}>
             {warranty.unavailable
@@ -158,6 +167,7 @@ function CartItemCard({ item }: { item: CartItem }) {
               <span className="w-7 text-center font-semibold text-sm text-foreground tabular-nums">{item.quantity}</span>
               <button
                 onClick={() => updateQuantity(item.id, item.quantity + 1)}
+                disabled={available !== undefined && item.quantity >= available}
                 aria-label={`Increase quantity of ${item.product.name}`}
                 className="w-7 h-7 rounded-full text-primary flex items-center justify-center hover:bg-card active:scale-90 transition-all"
               >
@@ -186,13 +196,18 @@ export default function CartPage() {
   const [placed, setPlaced] = useState<PlacedOrder | null>(null)
 
   const blocked = cart.some((item) => warrantyFor(item)?.unavailable)
+  // One request id per basket: retrying the same basket can never order it twice.
+  const orderRequest = useRef<{ key: string; id: string } | null>(null)
 
   /** The database prices every line again; the total it returns is the one recorded. */
   async function submitOrder() {
     setPlacing(true)
     setOrderError(null)
     try {
-      const order = await placeOrder(cart)
+      const key = cartOrderKey(cart)
+      if (orderRequest.current?.key !== key) orderRequest.current = { key, id: newOrderRequestId() }
+      const order = await placeOrder(cart, orderRequest.current.id)
+      orderRequest.current = null
       clearCart()
       setPlaced(order)
     } catch (err) {
@@ -214,7 +229,7 @@ export default function CartPage() {
           <p className="text-sm text-muted-foreground mb-1">Order {placed.orderNumber}</p>
           <p className="text-lg font-bold tracking-tight mb-2">{formatPrice(centsToRupees(placed.totalCents))}</p>
           <p className="text-[13px] text-muted-foreground mb-8 max-w-xs leading-relaxed">
-            We will contact you to confirm delivery and payment.
+            We are holding your items and will contact you to confirm delivery and payment. Orders not confirmed within 48 hours are released.
           </p>
           <div className="flex w-full max-w-xs flex-col gap-2.5">
             <Link href="/orders"><Button fullWidth size="lg">View my orders</Button></Link>

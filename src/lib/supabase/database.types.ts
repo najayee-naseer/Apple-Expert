@@ -223,6 +223,7 @@ export type Database = {
       }
       categories: {
         Row: {
+          default_tracking_mode: string
           created_at: string
           hero_blurb: string | null
           hero_eyebrow: string | null
@@ -239,6 +240,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          default_tracking_mode?: string
           created_at?: string
           hero_blurb?: string | null
           hero_eyebrow?: string | null
@@ -255,6 +257,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          default_tracking_mode?: string
           created_at?: string
           hero_blurb?: string | null
           hero_eyebrow?: string | null
@@ -386,35 +389,68 @@ export type Database = {
       }
       grn_lines: {
         Row: {
+          ordered_quantity: number | null
+          received_quantity: number
+          rejected_quantity: number
+          rejection_reason: string | null
+          purchase_order_line_id: string | null
+          po_unit_cost_cents: number | null
+          cost_pending: boolean
+          cost_note: string | null
+          corrected_quantity: number
+          returned_quantity: number
+          tracking_mode_snapshot: string
           grn_id: string
           id: string
           line_no: number
           product_id: string
           product_name_snapshot: string
-          quantity: number
-          unit_cost_cents: number
+          accepted_quantity: number
+          unit_cost_cents: number | null
           variant_id: string | null
           variant_label_snapshot: string | null
         }
         Insert: {
+          ordered_quantity?: number | null
+          received_quantity?: number
+          rejected_quantity?: number
+          rejection_reason?: string | null
+          purchase_order_line_id?: string | null
+          po_unit_cost_cents?: number | null
+          cost_pending?: boolean
+          cost_note?: string | null
+          corrected_quantity?: number
+          returned_quantity?: number
+          tracking_mode_snapshot?: string
           grn_id: string
           id?: string
           line_no: number
           product_id: string
           product_name_snapshot: string
-          quantity: number
-          unit_cost_cents?: number
+          accepted_quantity: number
+          unit_cost_cents?: number | null
           variant_id?: string | null
           variant_label_snapshot?: string | null
         }
         Update: {
+          ordered_quantity?: number | null
+          received_quantity?: number
+          rejected_quantity?: number
+          rejection_reason?: string | null
+          purchase_order_line_id?: string | null
+          po_unit_cost_cents?: number | null
+          cost_pending?: boolean
+          cost_note?: string | null
+          corrected_quantity?: number
+          returned_quantity?: number
+          tracking_mode_snapshot?: string
           grn_id?: string
           id?: string
           line_no?: number
           product_id?: string
           product_name_snapshot?: string
-          quantity?: number
-          unit_cost_cents?: number
+          accepted_quantity?: number
+          unit_cost_cents?: number | null
           variant_id?: string | null
           variant_label_snapshot?: string | null
         }
@@ -444,6 +480,12 @@ export type Database = {
       }
       grns: {
         Row: {
+          source_type: string
+          request_fingerprint: string | null
+          rejected_units: number
+          corrected_cost_cents: number
+          pending_cost_lines: number
+          duplicate_invoice_note: string | null
           created_at: string
           created_by: string | null
           grn_number: string
@@ -459,6 +501,12 @@ export type Database = {
           total_units: number
         }
         Insert: {
+          source_type?: string
+          request_fingerprint?: string | null
+          rejected_units?: number
+          corrected_cost_cents?: number
+          pending_cost_lines?: number
+          duplicate_invoice_note?: string | null
           created_at?: string
           created_by?: string | null
           grn_number: string
@@ -474,6 +522,12 @@ export type Database = {
           total_units: number
         }
         Update: {
+          source_type?: string
+          request_fingerprint?: string | null
+          rejected_units?: number
+          corrected_cost_cents?: number
+          pending_cost_lines?: number
+          duplicate_invoice_note?: string | null
           created_at?: string
           created_by?: string | null
           grn_number?: string
@@ -514,6 +568,7 @@ export type Database = {
       }
       inventory_movements: {
         Row: {
+          order_item_id: string | null
           actor_id: string | null
           created_at: string
           delta: number
@@ -532,6 +587,7 @@ export type Database = {
           variant_id: string | null
         }
         Insert: {
+          order_item_id?: string | null
           actor_id?: string | null
           created_at?: string
           delta: number
@@ -550,6 +606,7 @@ export type Database = {
           variant_id?: string | null
         }
         Update: {
+          order_item_id?: string | null
           actor_id?: string | null
           created_at?: string
           delta?: number
@@ -614,6 +671,8 @@ export type Database = {
       }
       inventory_units: {
         Row: {
+          location_code: string
+          reentry_of_unit_id: string | null
           barcode: string
           created_at: string
           fifo_seq: number
@@ -630,10 +689,12 @@ export type Database = {
           status_changed_at: string
           status_note: string | null
           supplier_return_id: string | null
-          unit_cost_cents: number
+          unit_cost_cents: number | null
           variant_id: string | null
         }
         Insert: {
+          location_code?: string
+          reentry_of_unit_id?: string | null
           barcode: string
           created_at?: string
           fifo_seq?: never
@@ -650,10 +711,12 @@ export type Database = {
           status_changed_at?: string
           status_note?: string | null
           supplier_return_id?: string | null
-          unit_cost_cents?: number
+          unit_cost_cents?: number | null
           variant_id?: string | null
         }
         Update: {
+          location_code?: string
+          reentry_of_unit_id?: string | null
           barcode?: string
           created_at?: string
           fifo_seq?: never
@@ -670,7 +733,7 @@ export type Database = {
           status_changed_at?: string
           status_note?: string | null
           supplier_return_id?: string | null
-          unit_cost_cents?: number
+          unit_cost_cents?: number | null
           variant_id?: string | null
         }
         Relationships: [
@@ -779,6 +842,8 @@ export type Database = {
       }
       order_items: {
         Row: {
+          stock_consumed_at: string | null
+          returned_quantity: number
           base_unit_price_cents: number | null
           condition_grade_snapshot: string | null
           condition_snapshot: string | null
@@ -801,6 +866,8 @@ export type Database = {
           warranty_price_cents_snapshot: number
         }
         Insert: {
+          stock_consumed_at?: string | null
+          returned_quantity?: number
           base_unit_price_cents?: number | null
           condition_grade_snapshot?: string | null
           condition_snapshot?: string | null
@@ -823,6 +890,8 @@ export type Database = {
           warranty_price_cents_snapshot?: number
         }
         Update: {
+          stock_consumed_at?: string | null
+          returned_quantity?: number
           base_unit_price_cents?: number | null
           condition_grade_snapshot?: string | null
           condition_snapshot?: string | null
@@ -891,6 +960,9 @@ export type Database = {
       }
       orders: {
         Row: {
+          reservation_expires_at: string | null
+          request_id: string | null
+          request_fingerprint: string | null
           created_at: string
           currency: string
           customer_type_at_purchase: string
@@ -903,12 +975,15 @@ export type Database = {
           profile_id: string
           shipping_address: Json | null
           status: string
-          stock_state: string | null
+          stock_state: string
           subtotal_cents: number
           total_cents: number
           updated_at: string
         }
         Insert: {
+          reservation_expires_at?: string | null
+          request_id?: string | null
+          request_fingerprint?: string | null
           created_at?: string
           currency?: string
           customer_type_at_purchase: string
@@ -927,6 +1002,9 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          reservation_expires_at?: string | null
+          request_id?: string | null
+          request_fingerprint?: string | null
           created_at?: string
           currency?: string
           customer_type_at_purchase?: string
@@ -1007,7 +1085,11 @@ export type Database = {
       }
       pos_sale_items: {
         Row: {
-          barcode_snapshot: string
+          quantity: number
+          line_total_cents: number
+          tier_code_snapshot: string
+          returned_quantity: number
+          barcode_snapshot: string | null
           id: string
           pos_sale_id: string
           price_id: string | null
@@ -1016,13 +1098,17 @@ export type Database = {
           return_note: string | null
           returned_at: string | null
           serial_snapshot: string | null
-          unit_id: string
+          unit_id: string | null
           unit_price_cents: number
           variant_id: string | null
           variant_label_snapshot: string | null
         }
         Insert: {
-          barcode_snapshot: string
+          quantity?: number
+          line_total_cents?: number
+          tier_code_snapshot?: string
+          returned_quantity?: number
+          barcode_snapshot: string | null
           id?: string
           pos_sale_id: string
           price_id?: string | null
@@ -1031,13 +1117,17 @@ export type Database = {
           return_note?: string | null
           returned_at?: string | null
           serial_snapshot?: string | null
-          unit_id: string
+          unit_id: string | null
           unit_price_cents: number
           variant_id?: string | null
           variant_label_snapshot?: string | null
         }
         Update: {
-          barcode_snapshot?: string
+          quantity?: number
+          line_total_cents?: number
+          tier_code_snapshot?: string
+          returned_quantity?: number
+          barcode_snapshot?: string | null
           id?: string
           pos_sale_id?: string
           price_id?: string | null
@@ -1046,7 +1136,7 @@ export type Database = {
           return_note?: string | null
           returned_at?: string | null
           serial_snapshot?: string | null
-          unit_id?: string
+          unit_id?: string | null
           unit_price_cents?: number
           variant_id?: string | null
           variant_label_snapshot?: string | null
@@ -1098,6 +1188,11 @@ export type Database = {
       }
       pos_sales: {
         Row: {
+          customer_profile_id: string | null
+          tier_code: string
+          payment_reference: string | null
+          request_fingerprint: string | null
+          discount_approval_id: string | null
           bill_number: string
           cashier_id: string | null
           created_at: string
@@ -1112,6 +1207,11 @@ export type Database = {
           total_cents: number
         }
         Insert: {
+          customer_profile_id?: string | null
+          tier_code?: string
+          payment_reference?: string | null
+          request_fingerprint?: string | null
+          discount_approval_id?: string | null
           bill_number: string
           cashier_id?: string | null
           created_at?: string
@@ -1126,6 +1226,11 @@ export type Database = {
           total_cents: number
         }
         Update: {
+          customer_profile_id?: string | null
+          tier_code?: string
+          payment_reference?: string | null
+          request_fingerprint?: string | null
+          discount_approval_id?: string | null
           bill_number?: string
           cashier_id?: string | null
           created_at?: string
@@ -1441,6 +1546,7 @@ export type Database = {
       }
       product_variants: {
         Row: {
+          tracking_mode: string | null
           color: string | null
           color_code: string | null
           created_at: string
@@ -1454,6 +1560,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          tracking_mode?: string | null
           color?: string | null
           color_code?: string | null
           created_at?: string
@@ -1467,6 +1574,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          tracking_mode?: string | null
           color?: string | null
           color_code?: string | null
           created_at?: string
@@ -1605,6 +1713,7 @@ export type Database = {
       }
       products: {
         Row: {
+          tracking_mode: string
           accessories_included: string | null
           battery_health: number | null
           category_id: string
@@ -1639,6 +1748,7 @@ export type Database = {
           warranty_type: string
         }
         Insert: {
+          tracking_mode?: string
           accessories_included?: string | null
           battery_health?: number | null
           category_id: string
@@ -1673,6 +1783,7 @@ export type Database = {
           warranty_type?: string
         }
         Update: {
+          tracking_mode?: string
           accessories_included?: string | null
           battery_health?: number | null
           category_id?: string
@@ -1782,6 +1893,9 @@ export type Database = {
       }
       purchase_order_lines: {
         Row: {
+          rejected_quantity: number
+          returned_quantity: number
+          cost_pending: boolean
           id: string
           line_no: number
           product_id: string
@@ -1789,11 +1903,14 @@ export type Database = {
           purchase_order_id: string
           quantity: number
           received_quantity: number
-          unit_cost_cents: number
+          unit_cost_cents: number | null
           variant_id: string | null
           variant_label_snapshot: string | null
         }
         Insert: {
+          rejected_quantity?: number
+          returned_quantity?: number
+          cost_pending?: boolean
           id?: string
           line_no: number
           product_id: string
@@ -1801,11 +1918,14 @@ export type Database = {
           purchase_order_id: string
           quantity: number
           received_quantity?: number
-          unit_cost_cents?: number
+          unit_cost_cents?: number | null
           variant_id?: string | null
           variant_label_snapshot?: string | null
         }
         Update: {
+          rejected_quantity?: number
+          returned_quantity?: number
+          cost_pending?: boolean
           id?: string
           line_no?: number
           product_id?: string
@@ -1813,7 +1933,7 @@ export type Database = {
           purchase_order_id?: string
           quantity?: number
           received_quantity?: number
-          unit_cost_cents?: number
+          unit_cost_cents?: number | null
           variant_id?: string | null
           variant_label_snapshot?: string | null
         }
@@ -1843,6 +1963,7 @@ export type Database = {
       }
       purchase_orders: {
         Row: {
+          request_fingerprint: string | null
           close_note: string | null
           closed_at: string | null
           created_at: string
@@ -1858,6 +1979,7 @@ export type Database = {
           total_cents: number
         }
         Insert: {
+          request_fingerprint?: string | null
           close_note?: string | null
           closed_at?: string | null
           created_at?: string
@@ -1873,6 +1995,7 @@ export type Database = {
           total_cents?: number
         }
         Update: {
+          request_fingerprint?: string | null
           close_note?: string | null
           closed_at?: string | null
           created_at?: string
@@ -1983,6 +2106,7 @@ export type Database = {
       }
       supplier_payments: {
         Row: {
+          request_fingerprint: string | null
           amount_cents: number
           created_at: string
           created_by: string | null
@@ -1999,6 +2123,7 @@ export type Database = {
           voided_by: string | null
         }
         Insert: {
+          request_fingerprint?: string | null
           amount_cents: number
           created_at?: string
           created_by?: string | null
@@ -2015,6 +2140,7 @@ export type Database = {
           voided_by?: string | null
         }
         Update: {
+          request_fingerprint?: string | null
           amount_cents?: number
           created_at?: string
           created_by?: string | null
@@ -2049,7 +2175,11 @@ export type Database = {
       }
       supplier_return_items: {
         Row: {
-          barcode_snapshot: string
+          quantity: number
+          grn_line_id: string | null
+          from_status: string | null
+          reversed_at: string | null
+          barcode_snapshot: string | null
           grn_id: string | null
           id: string
           product_id: string | null
@@ -2057,12 +2187,16 @@ export type Database = {
           serial_snapshot: string | null
           supplier_return_id: string
           unit_cost_cents: number
-          unit_id: string
+          unit_id: string | null
           variant_id: string | null
           variant_label_snapshot: string | null
         }
         Insert: {
-          barcode_snapshot: string
+          quantity?: number
+          grn_line_id?: string | null
+          from_status?: string | null
+          reversed_at?: string | null
+          barcode_snapshot: string | null
           grn_id?: string | null
           id?: string
           product_id?: string | null
@@ -2070,12 +2204,16 @@ export type Database = {
           serial_snapshot?: string | null
           supplier_return_id: string
           unit_cost_cents: number
-          unit_id: string
+          unit_id: string | null
           variant_id?: string | null
           variant_label_snapshot?: string | null
         }
         Update: {
-          barcode_snapshot?: string
+          quantity?: number
+          grn_line_id?: string | null
+          from_status?: string | null
+          reversed_at?: string | null
+          barcode_snapshot?: string | null
           grn_id?: string | null
           id?: string
           product_id?: string | null
@@ -2083,7 +2221,7 @@ export type Database = {
           serial_snapshot?: string | null
           supplier_return_id?: string
           unit_cost_cents?: number
-          unit_id?: string
+          unit_id?: string | null
           variant_id?: string | null
           variant_label_snapshot?: string | null
         }
@@ -2106,6 +2244,10 @@ export type Database = {
       }
       supplier_returns: {
         Row: {
+          request_fingerprint: string | null
+          reversed_at: string | null
+          reversed_by: string | null
+          reversal_note: string | null
           created_at: string
           created_by: string | null
           id: string
@@ -2119,6 +2261,10 @@ export type Database = {
           total_units: number
         }
         Insert: {
+          request_fingerprint?: string | null
+          reversed_at?: string | null
+          reversed_by?: string | null
+          reversal_note?: string | null
           created_at?: string
           created_by?: string | null
           id?: string
@@ -2132,6 +2278,10 @@ export type Database = {
           total_units?: number
         }
         Update: {
+          request_fingerprint?: string | null
+          reversed_at?: string | null
+          reversed_by?: string | null
+          reversal_note?: string | null
           created_at?: string
           created_by?: string | null
           id?: string
@@ -2172,7 +2322,7 @@ export type Database = {
           is_active: boolean
           name: string
           note: string | null
-          opening_balance_cents: number
+          opening_balance_cents: number | null
           phone: string | null
           supplier_code: string
           updated_at: string
@@ -2187,7 +2337,7 @@ export type Database = {
           is_active?: boolean
           name: string
           note?: string | null
-          opening_balance_cents?: number
+          opening_balance_cents?: number | null
           phone?: string | null
           supplier_code: string
           updated_at?: string
@@ -2202,7 +2352,7 @@ export type Database = {
           is_active?: boolean
           name?: string
           note?: string | null
-          opening_balance_cents?: number
+          opening_balance_cents?: number | null
           phone?: string | null
           supplier_code?: string
           updated_at?: string
@@ -2216,6 +2366,456 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      customer_refunds: {
+        Row: {
+          id: string
+          refund_number: string
+          source_type: string
+          pos_sale_id: string | null
+          order_id: string | null
+          customer_return_id: string | null
+          amount_cents: number
+          method: string
+          reference: string | null
+          note: string | null
+          created_by: string | null
+          request_id: string
+          request_fingerprint: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          refund_number?: string
+          source_type?: string
+          pos_sale_id?: string | null
+          order_id?: string | null
+          customer_return_id?: string | null
+          amount_cents?: number
+          method?: string
+          reference?: string | null
+          note?: string | null
+          created_by?: string | null
+          request_id?: string
+          request_fingerprint?: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          refund_number?: string
+          source_type?: string
+          pos_sale_id?: string | null
+          order_id?: string | null
+          customer_return_id?: string | null
+          amount_cents?: number
+          method?: string
+          reference?: string | null
+          note?: string | null
+          created_by?: string | null
+          request_id?: string
+          request_fingerprint?: string
+          created_at?: string
+        }
+        Relationships: []
+      }
+      customer_return_items: {
+        Row: {
+          id: string
+          customer_return_id: string
+          pos_sale_item_id: string | null
+          order_item_id: string | null
+          unit_id: string | null
+          quarantine_lot_id: string | null
+          product_id: string | null
+          variant_id: string | null
+          product_name_snapshot: string
+          variant_label_snapshot: string | null
+          quantity: number
+          condition: string
+        }
+        Insert: {
+          id?: string
+          customer_return_id?: string
+          pos_sale_item_id?: string | null
+          order_item_id?: string | null
+          unit_id?: string | null
+          quarantine_lot_id?: string | null
+          product_id?: string | null
+          variant_id?: string | null
+          product_name_snapshot?: string
+          variant_label_snapshot?: string | null
+          quantity?: number
+          condition?: string
+        }
+        Update: {
+          id?: string
+          customer_return_id?: string
+          pos_sale_item_id?: string | null
+          order_item_id?: string | null
+          unit_id?: string | null
+          quarantine_lot_id?: string | null
+          product_id?: string | null
+          variant_id?: string | null
+          product_name_snapshot?: string
+          variant_label_snapshot?: string | null
+          quantity?: number
+          condition?: string
+        }
+        Relationships: []
+      }
+      customer_returns: {
+        Row: {
+          id: string
+          return_number: string
+          source_type: string
+          pos_sale_id: string | null
+          order_id: string | null
+          note: string | null
+          created_by: string | null
+          request_id: string
+          request_fingerprint: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          return_number?: string
+          source_type?: string
+          pos_sale_id?: string | null
+          order_id?: string | null
+          note?: string | null
+          created_by?: string | null
+          request_id?: string
+          request_fingerprint?: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          return_number?: string
+          source_type?: string
+          pos_sale_id?: string | null
+          order_id?: string | null
+          note?: string | null
+          created_by?: string | null
+          request_id?: string
+          request_fingerprint?: string
+          created_at?: string
+        }
+        Relationships: []
+      }
+      grn_corrections: {
+        Row: {
+          id: string
+          grn_id: string
+          grn_line_id: string
+          quantity: number
+          value_cents: number
+          note: string
+          request_id: string
+          request_fingerprint: string
+          created_by: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          grn_id?: string
+          grn_line_id?: string
+          quantity?: number
+          value_cents?: number
+          note?: string
+          request_id?: string
+          request_fingerprint?: string
+          created_by?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          grn_id?: string
+          grn_line_id?: string
+          quantity?: number
+          value_cents?: number
+          note?: string
+          request_id?: string
+          request_fingerprint?: string
+          created_by?: string | null
+          created_at?: string
+        }
+        Relationships: []
+      }
+      inventory_audit_log: {
+        Row: {
+          id: string
+          entity_type: string
+          entity_id: string
+          action: string
+          actor_id: string | null
+          before_data: Json | null
+          after_data: Json | null
+          note: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          entity_type?: string
+          entity_id?: string
+          action?: string
+          actor_id?: string | null
+          before_data?: Json | null
+          after_data?: Json | null
+          note?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          entity_type?: string
+          entity_id?: string
+          action?: string
+          actor_id?: string | null
+          before_data?: Json | null
+          after_data?: Json | null
+          note?: string | null
+          created_at?: string
+        }
+        Relationships: []
+      }
+      inventory_locations: {
+        Row: {
+          code: string
+          name: string
+          is_sellable: boolean
+        }
+        Insert: {
+          code?: string
+          name?: string
+          is_sellable?: boolean
+        }
+        Update: {
+          code?: string
+          name?: string
+          is_sellable?: boolean
+        }
+        Relationships: []
+      }
+      inventory_policy: {
+        Row: {
+          id: boolean
+          max_reserved_units_per_customer: number | null
+          max_active_orders_per_customer: number | null
+          staff_max_discount_bps: number
+          updated_by: string | null
+          updated_at: string
+        }
+        Insert: {
+          id?: boolean
+          max_reserved_units_per_customer?: number | null
+          max_active_orders_per_customer?: number | null
+          staff_max_discount_bps?: number
+          updated_by?: string | null
+          updated_at?: string
+        }
+        Update: {
+          id?: boolean
+          max_reserved_units_per_customer?: number | null
+          max_active_orders_per_customer?: number | null
+          staff_max_discount_bps?: number
+          updated_by?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      pos_discount_approvals: {
+        Row: {
+          id: string
+          sale_request_id: string
+          items_fingerprint: string
+          requested_by: string
+          requested_cents: number
+          subtotal_cents: number
+          reason: string
+          status: string
+          decided_by: string | null
+          decided_at: string | null
+          decision_note: string | null
+          used_sale_id: string | null
+          expires_at: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          sale_request_id?: string
+          items_fingerprint?: string
+          requested_by?: string
+          requested_cents?: number
+          subtotal_cents?: number
+          reason?: string
+          status?: string
+          decided_by?: string | null
+          decided_at?: string | null
+          decision_note?: string | null
+          used_sale_id?: string | null
+          expires_at?: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          sale_request_id?: string
+          items_fingerprint?: string
+          requested_by?: string
+          requested_cents?: number
+          subtotal_cents?: number
+          reason?: string
+          status?: string
+          decided_by?: string | null
+          decided_at?: string | null
+          decision_note?: string | null
+          used_sale_id?: string | null
+          expires_at?: string
+          created_at?: string
+        }
+        Relationships: []
+      }
+      quarantine_lots: {
+        Row: {
+          id: string
+          product_id: string
+          variant_id: string | null
+          quantity: number
+          open_quantity: number
+          released_quantity: number
+          written_off_quantity: number
+          customer_return_id: string | null
+          note: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          product_id?: string
+          variant_id?: string | null
+          quantity?: number
+          open_quantity?: number
+          released_quantity?: number
+          written_off_quantity?: number
+          customer_return_id?: string | null
+          note?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          product_id?: string
+          variant_id?: string | null
+          quantity?: number
+          open_quantity?: number
+          released_quantity?: number
+          written_off_quantity?: number
+          customer_return_id?: string | null
+          note?: string | null
+          created_at?: string
+        }
+        Relationships: []
+      }
+      stock_reconciliation_flags: {
+        Row: {
+          id: string
+          order_id: string
+          order_item_id: string
+          product_id: string | null
+          variant_id: string | null
+          quantity: number
+          reason: string
+          resolved_at: string | null
+          resolved_by: string | null
+          resolution_note: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          order_id?: string
+          order_item_id?: string
+          product_id?: string | null
+          variant_id?: string | null
+          quantity?: number
+          reason?: string
+          resolved_at?: string | null
+          resolved_by?: string | null
+          resolution_note?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          order_id?: string
+          order_item_id?: string
+          product_id?: string | null
+          variant_id?: string | null
+          quantity?: number
+          reason?: string
+          resolved_at?: string | null
+          resolved_by?: string | null
+          resolution_note?: string | null
+          created_at?: string
+        }
+        Relationships: []
+      }
+      stock_reservations: {
+        Row: {
+          id: string
+          order_id: string
+          order_item_id: string
+          product_id: string
+          variant_id: string | null
+          holder_variant_id: string | null
+          quantity: number
+          status: string
+          expires_at: string | null
+          created_at: string
+          closed_at: string | null
+        }
+        Insert: {
+          id?: string
+          order_id?: string
+          order_item_id?: string
+          product_id?: string
+          variant_id?: string | null
+          holder_variant_id?: string | null
+          quantity?: number
+          status?: string
+          expires_at?: string | null
+          created_at?: string
+          closed_at?: string | null
+        }
+        Update: {
+          id?: string
+          order_id?: string
+          order_item_id?: string
+          product_id?: string
+          variant_id?: string | null
+          holder_variant_id?: string | null
+          quantity?: number
+          status?: string
+          expires_at?: string | null
+          created_at?: string
+          closed_at?: string | null
+        }
+        Relationships: []
+      }
+      supplier_payment_allocations: {
+        Row: {
+          id: string
+          payment_id: string
+          grn_id: string
+          amount_cents: number
+        }
+        Insert: {
+          id?: string
+          payment_id?: string
+          grn_id?: string
+          amount_cents?: number
+        }
+        Update: {
+          id?: string
+          payment_id?: string
+          grn_id?: string
+          amount_cents?: number
+        }
+        Relationships: []
       }
       user_roles: {
         Row: {
@@ -2513,56 +3113,6 @@ export type Database = {
         }
         Returns: Json
       }
-      admin_create_supplier_return: {
-        Args: {
-          p_codes: string[]
-          p_note: string
-          p_request_id: string
-          p_return_date: string
-          p_return_type: string
-          p_supplier_id: string
-        }
-        Returns: Json
-      }
-      admin_post_grn: {
-        Args: {
-          p_lines: Json
-          p_note: string
-          p_received_on: string
-          p_request_id: string
-          p_supplier_invoice: string
-          p_supplier_name: string
-        }
-        Returns: Json
-      }
-      admin_receive_goods: {
-        Args: {
-          p_lines: Json
-          p_note: string
-          p_purchase_order_id: string | null
-          p_received_on: string
-          p_request_id: string
-          p_supplier_id: string
-          p_supplier_invoice: string
-        }
-        Returns: Json
-      }
-      admin_record_supplier_payment: {
-        Args: {
-          p_amount_cents: number
-          p_method: string
-          p_note: string
-          p_paid_on: string
-          p_reference: string
-          p_request_id: string
-          p_supplier_id: string
-        }
-        Returns: Json
-      }
-      admin_return_pos_unit: {
-        Args: { p_note: string; p_unit_id: string }
-        Returns: Json
-      }
       admin_review_wholesale_request: {
         Args: { p_note?: string; p_request_id: string; p_status: string }
         Returns: {
@@ -2592,20 +3142,6 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
-      }
-      admin_save_supplier: {
-        Args: {
-          p_address: string
-          p_contact_person: string
-          p_email: string
-          p_id: string | null
-          p_is_active: boolean
-          p_name: string
-          p_note: string
-          p_opening_balance_cents: number
-          p_phone: string
-        }
-        Returns: Json
       }
       admin_set_customer_type: {
         Args: {
@@ -2673,30 +3209,6 @@ export type Database = {
           p_variant_id: string
         }
         Returns: Json
-      }
-      admin_supplier_balances: {
-        Args: never
-        Returns: {
-          balance_cents: number
-          cash_returns_cents: number
-          credit_returns_cents: number
-          opening_cents: number
-          payments_cents: number
-          purchases_cents: number
-          supplier_id: string
-        }[]
-      }
-      admin_unit_stock_summary: {
-        Args: never
-        Returns: {
-          in_stock: number
-          oldest_received_on: string
-          product_id: string
-          reserved: number
-          sold: number
-          variant_id: string
-          written_off: number
-        }[]
       }
       admin_update_wholesale_request: {
         Args: { p_admin_notes?: string; p_fields?: Json; p_request_id: string }
@@ -2767,19 +3279,157 @@ export type Database = {
         }
       }
       place_order: { Args: { p_lines: Json; p_notes?: string }; Returns: Json }
+      admin_correct_grn_line: {
+        Args: { p_grn_line_id: string; p_note: string; p_quantity: number | null; p_request_id: string; p_unit_ids: string[] | null }
+        Returns: Json
+      }
+      admin_create_supplier_return: {
+        Args: { p_codes: string[]; p_note: string; p_quantity_lines: Json; p_request_id: string; p_return_date: string; p_return_type: string; p_supplier_id: string }
+        Returns: Json
+      }
+      admin_decide_discount_approval: {
+        Args: { p_approval_id: string; p_approve: boolean; p_note: string | null }
+        Returns: Json
+      }
+      admin_inventory_dashboard: {
+        Args: never
+        Returns: {
+          product_id: string
+          variant_id: string | null
+          product_name: string
+          variant_name: string | null
+          category_name: string | null
+          is_active: boolean
+          tracking_mode: string
+          stock_scope: string
+          on_hand: number
+          reserved: number
+          available: number
+          sold: number
+          quarantined: number
+          returned_to_supplier: number
+          written_off: number
+          serialised_units: number
+          oldest_received_on: string | null
+          stock_status: string
+        }[]
+      }
+      admin_purchase_costs: {
+        Args: { p_ids: string[]; p_kind: string }
+        Returns: { id: string; parent_id: string | null; cents: number | null; pending: boolean; extra: Json | null }[]
+      }
+      admin_quarantine_units: { Args: { p_note: string; p_unit_ids: string[] }; Returns: Json }
+      admin_receive_goods: {
+        Args: {
+          p_confirm_duplicate_invoice: boolean
+          p_duplicate_invoice_note: string | null
+          p_lines: Json
+          p_note: string
+          p_purchase_order_id: string | null
+          p_received_on: string
+          p_request_id: string
+          p_source_name: string | null
+          p_source_type: string
+          p_supplier_id: string | null
+          p_supplier_invoice: string
+        }
+        Returns: Json
+      }
+      admin_record_customer_refund: {
+        Args: { p_amount_cents: number; p_customer_return_id: string | null; p_method: string; p_note: string; p_reference: string; p_request_id: string; p_source_id: string; p_source_type: string }
+        Returns: Json
+      }
+      admin_record_customer_return: {
+        Args: { p_items: Json; p_note: string; p_request_id: string; p_source_id: string; p_source_type: string }
+        Returns: Json
+      }
+      admin_record_supplier_payment: {
+        Args: { p_allocations: Json; p_amount_cents: number; p_method: string; p_note: string; p_paid_on: string; p_reference: string; p_request_id: string; p_supplier_id: string }
+        Returns: Json
+      }
+      admin_release_quarantine_units: { Args: { p_note: string; p_unit_ids: string[] }; Returns: Json }
+      admin_resolve_quarantine_lot: {
+        Args: { p_expected_open: number; p_lot_id: string; p_note: string; p_release: number; p_write_off: number }
+        Returns: Json
+      }
+      admin_resolve_stock_flag: { Args: { p_flag_id: string; p_note: string }; Returns: Json }
+      admin_reverse_supplier_return: { Args: { p_note: string; p_return_id: string }; Returns: Json }
+      admin_save_inventory_policy: {
+        Args: { p_max_active_orders_per_customer: number | null; p_max_reserved_units_per_customer: number | null; p_note: string; p_staff_max_discount_bps: number }
+        Returns: Json
+      }
+      admin_save_supplier: {
+        Args: {
+          p_address: string
+          p_contact_person: string
+          p_email: string
+          p_id: string | null
+          p_is_active: boolean
+          p_name: string
+          p_note: string
+          p_opening_balance_cents: number | null
+          p_opening_balance_note: string | null
+          p_phone: string
+        }
+        Returns: Json
+      }
+      admin_set_grn_line_cost: { Args: { p_grn_line_id: string; p_note: string; p_unit_cost_cents: number }; Returns: Json }
+      admin_set_tracking_mode: {
+        Args: { p_mode: string; p_note: string; p_product_id: string; p_variant_id: string | null }
+        Returns: Json
+      }
+      admin_supplier_balances: {
+        Args: never
+        Returns: {
+          supplier_id: string
+          opening_cents: number | null
+          purchases_cents: number
+          credit_returns_cents: number
+          cash_returns_cents: number
+          payments_cents: number
+          balance_cents: number
+          pending_cost_lines: number
+        }[]
+      }
+      admin_supplier_open_grns: {
+        Args: { p_supplier_id: string }
+        Returns: { grn_id: string; grn_number: string; received_on: string; supplier_invoice: string | null; amount_cents: number; allocated_cents: number; outstanding_cents: number }[]
+      }
+      admin_supplier_statement: {
+        Args: { p_supplier_id: string }
+        Returns: { occurred_on: string; recorded_at: string; kind: string; reference: string; description: string; debit_cents: number | null; credit_cents: number }[]
+      }
+      catalog_availability: {
+        Args: never
+        Returns: { product_id: string; variant_id: string | null; legacy_key: string | null; available: number }[]
+      }
+      expire_pending_orders: { Args: { p_limit?: number }; Returns: Json }
+      place_order_v2: { Args: { p_lines: Json; p_notes: string | null; p_request_id: string }; Returns: Json }
       pos_create_sale: {
         Args: {
-          p_codes: string[]
           p_customer_name: string
           p_customer_phone: string
+          p_customer_profile_id: string | null
+          p_discount_approval_id: string | null
           p_discount_cents: number
+          p_items: Json
           p_note: string
           p_payment_method: string
+          p_payment_reference: string
           p_request_id: string
         }
         Returns: Json
       }
-      pos_lookup_unit: { Args: { p_code: string }; Returns: Json }
+      pos_find_customer: {
+        Args: { p_phone: string }
+        Returns: { profile_id: string; full_name: string | null; phone: string | null; tier_code: string }[]
+      }
+      pos_lookup_unit: { Args: { p_code: string; p_customer_profile_id: string | null }; Returns: Json }
+      pos_quote_product: { Args: { p_customer_profile_id: string | null; p_product_id: string; p_variant_id: string | null }; Returns: Json }
+      pos_request_discount_approval: {
+        Args: { p_customer_profile_id: string | null; p_discount_cents: number; p_items: Json; p_reason: string; p_sale_request_id: string }
+        Returns: Json
+      }
     }
     Enums: {
       [_ in never]: never

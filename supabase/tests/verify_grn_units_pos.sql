@@ -1,7 +1,11 @@
 -- ============================================================================
 -- Apple Expert - GRN, barcode units, FIFO reservation and POS verification
 -- ----------------------------------------------------------------------------
--- Run AFTER migration 20261028120000 and the seed, as postgres:
+-- Updated for 20261101100000-130000: orders hold stock instead of taking it, the
+-- number falls on first shipment, and returns go to quarantine.
+-- NOT YET EXECUTED against the updated migrations.
+--
+-- Run AFTER all migrations and the seed, as postgres:
 --
 --   docker exec -i supabase_db_apple-expert psql -U postgres \
 --     < supabase/tests/verify_grn_units_pos.sql
@@ -22,6 +26,9 @@
 -- ---------------------------------------------------------------------------
 begin;
 delete from public.inventory_movements where product_id like 'gt-%';
+delete from public.customer_return_items where product_id like 'gt-%';
+delete from public.quarantine_lots where product_id like 'gt-%';
+delete from public.stock_reservations where product_id like 'gt-%';
 delete from public.inventory_units where product_id like 'gt-%';
 delete from public.grn_lines where product_id like 'gt-%';
 delete from public.grns where supplier_name like 'gt-%';
@@ -57,10 +64,10 @@ values ('gt-phones', 'GT Phones', 99, false, true);
 
 -- A phone (IMEI required) with two variants sharing stock,
 -- a case with no variants, and an item that still carries untracked stock.
-insert into public.products (id, name, category_id, subcategory, stock, is_active) values
-  ('gt-phone',  'GT Phone',  (select id from public.categories where slug = 'gt-phones'),   'Devices',           0, true),
-  ('gt-case',   'GT Case',   (select id from public.categories where slug = 'accessories'), 'Other Accessories', 0, true),
-  ('gt-legacy', 'GT Legacy', (select id from public.categories where slug = 'accessories'), 'Other Accessories', 5, true);
+insert into public.products (id, name, category_id, subcategory, stock, is_active, tracking_mode) values
+  ('gt-phone',  'GT Phone',  (select id from public.categories where slug = 'gt-phones'),   'Devices',           0, true, 'unit'),
+  ('gt-case',   'GT Case',   (select id from public.categories where slug = 'accessories'), 'Other Accessories', 0, true, 'unit'),
+  ('gt-legacy', 'GT Legacy', (select id from public.categories where slug = 'accessories'), 'Other Accessories', 5, true, 'quantity');
 
 insert into public.product_variants (id, product_id, legacy_key, name, stock) values
   ('9a000000-0000-0000-0000-00000000000a', 'gt-phone', 'v1', 'Blue 128GB', null),
@@ -103,6 +110,15 @@ end $$;
 create function pg_temp.stock_of(p text) returns integer language sql as $$
   select stock from public.products where id = p $$;
 
+-- A delivery with no supplier record: the opening-stock path keeps these checks
+-- about units, FIFO and POS independent of purchasing (verify_purchase_returns.sql).
+create function pg_temp.receive(p_on date, p_lines jsonb, p_req uuid default gen_random_uuid()) returns jsonb language sql as $$
+  select public.admin_receive_goods('opening', null, null, null, null, false, null, p_on, null, p_lines, p_req) $$;
+
+create function pg_temp.line(p_product text, p_variant uuid, p_qty integer, p_cost bigint, p_serials jsonb default null) returns jsonb language sql as $$
+  select jsonb_strip_nulls(jsonb_build_object('product_id', p_product, 'variant_id', p_variant, 'received_quantity', p_qty,
+                                              'unit_cost_cents', p_cost, 'serials', p_serials)) $$;
+
 do $$
 declare
   c_admin    constant text := '91111111-1111-1111-1111-111111111111';
@@ -131,16 +147,16 @@ begin
   end if;
 
   -- G1 ---------------------------------------------------------------------
-  v_lines := jsonb_build_array(jsonb_build_object('product_id', 'gt-case', 'quantity', 1));
+  v_lines := jsonb_build_array(pg_temp.line('gt-case', null, 1, 100));
   perform pg_temp.as_user(c_staff);
   perform pg_temp.expect_fail('G1a staff GRN',
-    format('select public.admin_post_grn(%L, null, %L::date, null, %L::jsonb, gen_random_uuid())', 'gt-supplier', v_today, v_lines),
+    format('select pg_temp.receive(%L::date, %L::jsonb)', v_today, v_lines),
     'insufficient_privilege:%');
   perform pg_temp.as_user(c_customer);
   perform pg_temp.expect_fail('G1b customer POS',
-    $q$select public.pos_create_sale(array['AE00000001'], 'cash', 0, null, null, null, gen_random_uuid())$q$,
+    $q$select public.pos_create_sale('[{"code":"AE00000001"}]'::jsonb, 'cash', null, 0, null, null, null, null, null, gen_random_uuid())$q$,
     'insufficient_privilege:%');
-  perform pg_temp.expect_fail('G1c customer lookup', $q$select public.pos_lookup_unit('AE00000001')$q$,
+  perform pg_temp.expect_fail('G1c customer lookup', $q$select public.pos_lookup_unit('AE00000001', null)$q$,
     'insufficient_privilege:%');
   perform pg_temp.expect_fail('G1d direct unit insert',
     $q$insert into public.inventory_units (barcode, product_id, grn_id, grn_line_id, received_on)
@@ -151,49 +167,45 @@ begin
   -- G2 serial rules ----------------------------------------------------------
   perform pg_temp.as_user(c_admin);
   perform pg_temp.expect_fail('G2a phone without IMEI',
-    format('select public.admin_post_grn(%L, null, %L::date, null, %L::jsonb, gen_random_uuid())', 'gt-supplier', v_today,
-      jsonb_build_array(jsonb_build_object('product_id', 'gt-phone', 'variant_id', c_va, 'quantity', 1))),
+    format('select pg_temp.receive(%L::date, %L::jsonb)', v_today, jsonb_build_array(pg_temp.line('gt-phone', c_va, 1, 100))),
     'serial_required:%');
   perform pg_temp.expect_fail('G2b bad IMEI check digit',
-    format('select public.admin_post_grn(%L, null, %L::date, null, %L::jsonb, gen_random_uuid())', 'gt-supplier', v_today,
-      jsonb_build_array(jsonb_build_object('product_id', 'gt-phone', 'variant_id', c_va, 'quantity', 1,
-                                           'serials', jsonb_build_array('356938035643800')))),
+    format('select pg_temp.receive(%L::date, %L::jsonb)', v_today,
+      jsonb_build_array(pg_temp.line('gt-phone', c_va, 1, 100, jsonb_build_array('356938035643800')))),
     'invalid_imei:%');
   perform pg_temp.expect_fail('G2c duplicate IMEI in one GRN',
-    format('select public.admin_post_grn(%L, null, %L::date, null, %L::jsonb, gen_random_uuid())', 'gt-supplier', v_today,
-      jsonb_build_array(jsonb_build_object('product_id', 'gt-phone', 'variant_id', c_va, 'quantity', 2,
-                                           'serials', jsonb_build_array('356938035643809', '356938035643809')))),
+    format('select pg_temp.receive(%L::date, %L::jsonb)', v_today,
+      jsonb_build_array(pg_temp.line('gt-phone', c_va, 2, 100, jsonb_build_array('356938035643809', '356938035643809')))),
     'duplicate_serial:%');
   perform pg_temp.expect_fail('G2d serial count mismatch',
-    format('select public.admin_post_grn(%L, null, %L::date, null, %L::jsonb, gen_random_uuid())', 'gt-supplier', v_today,
-      jsonb_build_array(jsonb_build_object('product_id', 'gt-phone', 'variant_id', c_va, 'quantity', 2,
-                                           'serials', jsonb_build_array('356938035643809')))),
+    format('select pg_temp.receive(%L::date, %L::jsonb)', v_today,
+      jsonb_build_array(pg_temp.line('gt-phone', c_va, 2, 100, jsonb_build_array('356938035643809')))),
     'invalid_serials:%');
   perform pg_temp.expect_fail('G2e variant required',
-    format('select public.admin_post_grn(%L, null, %L::date, null, %L::jsonb, gen_random_uuid())', 'gt-supplier', v_today,
-      jsonb_build_array(jsonb_build_object('product_id', 'gt-phone', 'quantity', 1,
-                                           'serials', jsonb_build_array('356938035643809')))),
+    format('select pg_temp.receive(%L::date, %L::jsonb)', v_today,
+      jsonb_build_array(pg_temp.line('gt-phone', null, 1, 100, jsonb_build_array('356938035643809')))),
     'variant_required:%');
   perform pg_temp.expect_fail('G2f future date',
-    format('select public.admin_post_grn(%L, null, %L::date, null, %L::jsonb, gen_random_uuid())', 'gt-supplier', v_today + 2, v_lines),
+    format('select pg_temp.receive(%L::date, %L::jsonb)', v_today + 2, v_lines),
     'invalid_date:%');
-  raise notice 'G2 ok - IMEI required for phones, Luhn checked, duplicates and mismatches refused';
+  perform pg_temp.expect_fail('G2g blank cost is not free',
+    format('select pg_temp.receive(%L::date, %L::jsonb)', v_today,
+      jsonb_build_array(jsonb_build_object('product_id', 'gt-case', 'received_quantity', 1))),
+    'cost_required:%');
+  raise notice 'G2 ok - IMEI required for phones, Luhn checked, duplicates and mismatches refused, blank cost refused';
 
-  -- G3 untracked stock -------------------------------------------------------
-  perform pg_temp.expect_fail('G3 untracked stock',
-    format('select public.admin_post_grn(%L, null, %L::date, null, %L::jsonb, gen_random_uuid())', 'gt-supplier', v_today,
-      jsonb_build_array(jsonb_build_object('product_id', 'gt-legacy', 'quantity', 2))),
-    'untracked_stock:%');
-  raise notice 'G3 ok - a GRN is refused while untracked stock remains';
+  -- G3 modes -----------------------------------------------------------------
+  perform pg_temp.expect_fail('G3 tracking mode needs zero stock',
+    $q$select public.admin_set_tracking_mode('gt-legacy', null, 'unit', 'try to convert')$q$,
+    'tracking_mode_locked:%');
+  raise notice 'G3 ok - a number cannot silently become unit tracked';
 
-  -- G4 post GRN 1 ------------------------------------------------------------
-  v_res := public.admin_post_grn('gt-supplier A', 'INV-77', v_today - 1, 'first delivery',
+  -- G4 receive 1 -------------------------------------------------------------
+  v_res := public.admin_receive_goods('opening', null, null, null, 'INV-77', false, null, v_today - 1, 'first delivery',
     jsonb_build_array(
-      jsonb_build_object('product_id', 'gt-phone', 'variant_id', c_va, 'quantity', 3, 'unit_cost_cents', 18000000,
-                         'serials', jsonb_build_array('356938035643809', ' 3569 3803 5643 817 ', '356938035643825')),
-      jsonb_build_object('product_id', 'gt-phone', 'variant_id', c_vb, 'quantity', 2, 'unit_cost_cents', 22000000,
-                         'serials', jsonb_build_array('356938035643833', '356938035643841')),
-      jsonb_build_object('product_id', 'gt-case', 'quantity', 4, 'unit_cost_cents', 150000)),
+      pg_temp.line('gt-phone', c_va, 3, 18000000, jsonb_build_array('356938035643809', ' 3569 3803 5643 817 ', '356938035643825')),
+      pg_temp.line('gt-phone', c_vb, 2, 22000000, jsonb_build_array('356938035643833', '356938035643841')),
+      pg_temp.line('gt-case', null, 4, 150000)),
     v_req);
   v_grn1 := (v_res ->> 'id')::uuid;
   if (v_res ->> 'total_units')::int <> 9 or v_res ->> 'grn_number' !~ '^GRN-[0-9]{6}-[0-9]{4}$' then
@@ -208,134 +220,177 @@ begin
   if not exists (select 1 from public.inventory_units where serial_number = '356938035643817') then
     raise exception 'G4 FAILED - serial was not normalised (spaces removed)';
   end if;
-  select count(*) into v_n from public.inventory_movements where grn_id = v_grn1 and reason = 'restock';
+  select count(*) into v_n from public.inventory_movements where grn_id = v_grn1;
   if v_n <> 2 then raise exception 'G4 FAILED - % ledger rows for the GRN, expected 2 (one per stock holder)', v_n; end if;
   raise notice 'G4 ok - GRN created 9 barcoded units, stock rose through the ledger';
 
-  -- G5 replay + duplicate serial across GRNs + Adjust stock refused ---------------
-  v_res := public.admin_post_grn('gt-supplier A', 'INV-77', v_today - 1, 'first delivery', '[]'::jsonb, v_req);
+  -- G5 replay + duplicate serial + Adjust stock refused ------------------------
+  v_res := public.admin_receive_goods('opening', null, null, null, 'INV-77', false, null, v_today - 1, 'first delivery',
+    jsonb_build_array(
+      pg_temp.line('gt-phone', c_va, 3, 18000000, jsonb_build_array('356938035643809', ' 3569 3803 5643 817 ', '356938035643825')),
+      pg_temp.line('gt-phone', c_vb, 2, 22000000, jsonb_build_array('356938035643833', '356938035643841')),
+      pg_temp.line('gt-case', null, 4, 150000)),
+    v_req);
   if not (v_res ->> 'replayed')::boolean or (v_res ->> 'id')::uuid <> v_grn1 then
     raise exception 'G5 FAILED - replay returned %', v_res;
   end if;
-  perform pg_temp.expect_fail('G5b serial already recorded',
-    format('select public.admin_post_grn(%L, null, %L::date, null, %L::jsonb, gen_random_uuid())', 'gt-supplier', v_today,
-      jsonb_build_array(jsonb_build_object('product_id', 'gt-phone', 'variant_id', c_va, 'quantity', 1,
-                                           'serials', jsonb_build_array('356938035643809')))),
+  perform pg_temp.expect_fail('G5a request id with other content',
+    format('select pg_temp.receive(%L::date, %L::jsonb, %L::uuid)', v_today, v_lines, v_req),
+    'request_id_reused:%');
+  perform pg_temp.expect_fail('G5b serial in the shop',
+    format('select pg_temp.receive(%L::date, %L::jsonb)', v_today,
+      jsonb_build_array(pg_temp.line('gt-phone', c_va, 1, 100, jsonb_build_array('356938035643809')))),
     'duplicate_serial:%');
   perform pg_temp.expect_fail('G5c adjust stock on tracked item',
     $q$select public.admin_set_stock('gt-case', null, 4, 10, 'restock', 'more cases', gen_random_uuid())$q$,
     'unit_tracked:%');
-  raise notice 'G5 ok - replay applied once, serials unique across GRNs, Adjust stock refused for tracked items';
+  raise notice 'G5 ok - replay applied once, different content refused, active serials unique, Adjust stock refused';
 
-  -- G6 GRN 2, received EARLIER -> its unit must be picked first ---------------
-  v_res := public.admin_post_grn('gt-supplier B', null, v_today - 5, null,
-    jsonb_build_array(jsonb_build_object('product_id', 'gt-phone', 'variant_id', c_va, 'quantity', 1,
-                                         'serials', jsonb_build_array('356938035643858'))),
-    gen_random_uuid());
+  -- G6 received EARLIER -> picked first; the order HOLDS, the number stays --------
+  v_res := pg_temp.receive(v_today - 5, jsonb_build_array(pg_temp.line('gt-phone', c_va, 1, 100, jsonb_build_array('356938035643858'))));
   v_grn2 := (v_res ->> 'id')::uuid;
   if pg_temp.stock_of('gt-phone') <> 6 then raise exception 'G6 FAILED - phone stock %', pg_temp.stock_of('gt-phone'); end if;
 
-  -- Customer places an order for 2 x variant A.
   perform pg_temp.as_user(c_customer);
   select count(*) into v_n from public.inventory_units;
   if v_n <> 0 then raise exception 'G6 FAILED - a customer can read % inventory units', v_n; end if;
 
-  v_order := public.place_order(jsonb_build_array(jsonb_build_object('product_id', 'gt-phone', 'variant_key', 'v1', 'quantity', 2)), 'gt-fixture');
+  v_req := gen_random_uuid();
+  v_order := public.place_order_v2(jsonb_build_array(jsonb_build_object('product_id', 'gt-phone', 'variant_key', 'v1', 'quantity', 2)), 'gt-fixture', v_req);
   v_order_id := (v_order ->> 'id')::uuid;
 
-  perform pg_temp.as_user(c_staff);
-  if pg_temp.stock_of('gt-phone') <> 4 then raise exception 'G6 FAILED - stock after order %', pg_temp.stock_of('gt-phone'); end if;
-  if (select stock_state from public.orders where id = v_order_id) <> 'reserved' then
-    raise exception 'G6 FAILED - order stock_state not reserved';
+  -- Same request, same content: the first order. Different content: refused.
+  if (public.place_order_v2(jsonb_build_array(jsonb_build_object('product_id', 'gt-phone', 'variant_key', 'v1', 'quantity', 2)), 'gt-fixture', v_req) ->> 'id')::uuid <> v_order_id then
+    raise exception 'G6 FAILED - order replay created a second order';
   end if;
-  -- FIFO: the GRN 2 unit (5 days old) and the FIRST unit of GRN 1.
+  perform pg_temp.expect_fail('G6a request id with other content',
+    format('select public.place_order_v2(%L::jsonb, null, %L::uuid)',
+           jsonb_build_array(jsonb_build_object('product_id', 'gt-phone', 'variant_key', 'v1', 'quantity', 1)), v_req),
+    'request_id_reused:%');
+
+  perform pg_temp.as_user(c_staff);
+  if pg_temp.stock_of('gt-phone') <> 6 then raise exception 'G6 FAILED - placing an order moved the number to %', pg_temp.stock_of('gt-phone'); end if;
+  if (select stock_state from public.orders where id = v_order_id) <> 'reserved'
+     or (select reservation_expires_at from public.orders where id = v_order_id) is null then
+    raise exception 'G6 FAILED - order not reserved with an expiry';
+  end if;
   select array_agg(serial_number order by received_on, fifo_seq) into v_codes
     from public.inventory_units where order_id = v_order_id and status = 'reserved';
   if v_codes is distinct from array['356938035643858', '356938035643809'] then
     raise exception 'G6 FAILED - FIFO picked %', v_codes;
   end if;
-  raise notice 'G6 ok - online order took stock and reserved the oldest units first (FIFO); customers see no units';
+  raise notice 'G6 ok - online order holds the oldest units; the number is unmoved; request id is idempotent';
 
   -- G7 variant without enough units --------------------------------------------
   perform pg_temp.as_user(c_customer);
   perform pg_temp.expect_fail('G7 variant B over units',
     $q$select public.place_order('[{"product_id":"gt-phone","variant_key":"v2","quantity":3}]'::jsonb, 'gt-fixture')$q$,
     'insufficient_stock:%');
-  raise notice 'G7 ok - an order larger than that variant''s units is refused';
+  if (select available from public.catalog_availability() a where a.product_id = 'gt-phone' and a.legacy_key = 'v2') <> 2
+     or (select available from public.catalog_availability() a where a.product_id = 'gt-phone' and a.legacy_key = 'v1') <> 2 then
+    raise exception 'G7 FAILED - per-variant availability is wrong';
+  end if;
+  raise notice 'G7 ok - availability is per variant, an order larger than it is refused';
 
-  -- G8 cancel / re-activate / ship ---------------------------------------------
+  -- G8 cancel / re-activate / confirm / ship -------------------------------------
   perform pg_temp.as_user(c_staff);
   update public.orders set status = 'cancelled' where id = v_order_id;
   if pg_temp.stock_of('gt-phone') <> 6
      or exists (select 1 from public.inventory_units where order_id = v_order_id)
      or (select stock_state from public.orders where id = v_order_id) <> 'released' then
-    raise exception 'G8 FAILED - cancel did not return stock (stock %)', pg_temp.stock_of('gt-phone');
+    raise exception 'G8 FAILED - cancel did not release (stock %)', pg_temp.stock_of('gt-phone');
   end if;
-  -- (A delivery in between: within ONE transaction the ledger's exactly-once
-  -- rule forbids repeating the very same 6 -> 4 transition, which in real use
-  -- never happens because each status change is its own request.)
-  perform pg_temp.as_user(c_admin);
-  perform public.admin_post_grn('gt-supplier C', null, v_today, null,
-    jsonb_build_array(jsonb_build_object('product_id', 'gt-phone', 'variant_id', c_vb, 'quantity', 1,
-                                         'serials', jsonb_build_array('356938035643866'))),
-    gen_random_uuid());
-  perform pg_temp.as_user(c_staff);
   update public.orders set status = 'confirmed' where id = v_order_id;
-  if pg_temp.stock_of('gt-phone') <> 5
-     or (select count(*) from public.inventory_units where order_id = v_order_id and status = 'reserved') <> 2 then
-    raise exception 'G8 FAILED - re-activation did not reserve again';
+  if pg_temp.stock_of('gt-phone') <> 6
+     or (select count(*) from public.inventory_units where order_id = v_order_id and status = 'reserved') <> 2
+     or (select reservation_expires_at from public.orders where id = v_order_id) is not null then
+    raise exception 'G8 FAILED - re-activation should hold again, and confirmed orders never expire';
   end if;
   update public.orders set status = 'shipped' where id = v_order_id;
-  if (select count(*) from public.inventory_units where order_id = v_order_id and status = 'sold') <> 2 then
-    raise exception 'G8 FAILED - shipping did not mark units sold';
+  if pg_temp.stock_of('gt-phone') <> 4
+     or (select count(*) from public.inventory_units where order_id = v_order_id and status = 'sold') <> 2
+     or (select stock_state from public.orders where id = v_order_id) <> 'consumed' then
+    raise exception 'G8 FAILED - first shipment should deduct once (stock %)', pg_temp.stock_of('gt-phone');
   end if;
-  raise notice 'G8 ok - cancel returns units and stock, re-activation reserves again, shipping marks units sold';
+  -- Exactly once, whatever the status does next.
+  update public.orders set status = 'delivered' where id = v_order_id;
+  update public.orders set status = 'processing' where id = v_order_id;
+  update public.orders set status = 'shipped' where id = v_order_id;
+  if pg_temp.stock_of('gt-phone') <> 4 then raise exception 'G8 FAILED - deducted twice: stock %', pg_temp.stock_of('gt-phone'); end if;
+  if (select count(*) from public.inventory_movements where order_id = v_order_id and reason = 'sale') <> 1 then
+    raise exception 'G8 FAILED - expected one sale ledger row per line';
+  end if;
+  -- Cancel after shipping does not restore stock.
+  update public.orders set status = 'cancelled' where id = v_order_id;
+  if pg_temp.stock_of('gt-phone') <> 4
+     or (select count(*) from public.inventory_units where order_id = v_order_id and status = 'sold') <> 2 then
+    raise exception 'G8 FAILED - cancelling a shipped order must not restore stock';
+  end if;
+  raise notice 'G8 ok - cancel releases, reactivate holds, first shipment deducts exactly once, cancel after shipping restores nothing';
 
   -- G9 POS ---------------------------------------------------------------------
   select barcode into v_barcode from public.inventory_units
    where product_id = 'gt-case' and status = 'in_stock' order by fifo_seq limit 1;
-  v_res := public.pos_lookup_unit(lower(v_barcode));
+  v_res := public.pos_lookup_unit(lower(v_barcode), null);
   if v_res ->> 'barcode' <> v_barcode or (v_res ->> 'price_cents')::bigint <> 300000 then
     raise exception 'G9 FAILED - lookup by barcode %', v_res;
   end if;
-  v_res := public.pos_lookup_unit('356938035643833');
+  v_res := public.pos_lookup_unit('356938035643833', null);
   if v_res ->> 'variant_name' <> 'Black 256GB' or (v_res ->> 'price_cents')::bigint <> 25000000 then
     raise exception 'G9 FAILED - lookup by IMEI %', v_res;
   end if;
 
-  -- A unit reserved by an online order cannot be sold at the counter.
-  select barcode into v_reserved from public.inventory_units where order_id = v_order_id limit 1;
-  perform pg_temp.expect_fail('G9a sold/reserved unit',
-    format('select public.pos_create_sale(array[%L], %L, 0, null, null, null, gen_random_uuid())', v_reserved, 'cash'),
+  -- A unit held by an online order cannot be sold at the counter.
+  perform pg_temp.as_user(c_customer);
+  v_order := public.place_order('[{"product_id":"gt-phone","variant_key":"v1","quantity":1}]'::jsonb, 'gt-fixture');
+  perform pg_temp.as_user(c_staff);
+  select barcode into v_reserved from public.inventory_units where order_id = (v_order ->> 'id')::uuid limit 1;
+  perform pg_temp.expect_fail('G9a reserved unit',
+    format('select public.pos_create_sale(%L::jsonb, %L, null, 0, null, null, null, null, null, gen_random_uuid())',
+           jsonb_build_array(jsonb_build_object('code', v_reserved)), 'cash'),
     'unit_not_available:%');
+  update public.orders set status = 'cancelled' where id = (v_order ->> 'id')::uuid;
+
   perform pg_temp.expect_fail('G9b scanned twice',
-    format('select public.pos_create_sale(array[%L, %L], %L, 0, null, null, null, gen_random_uuid())', v_barcode, v_barcode, 'cash'),
+    format('select public.pos_create_sale(%L::jsonb, %L, null, 0, null, null, null, null, null, gen_random_uuid())',
+           jsonb_build_array(jsonb_build_object('code', v_barcode), jsonb_build_object('code', v_barcode)), 'cash'),
     'duplicate_item:%');
   perform pg_temp.expect_fail('G9c discount too big',
-    format('select public.pos_create_sale(array[%L], %L, 999999999, null, null, null, gen_random_uuid())', v_barcode, 'cash'),
+    format('select public.pos_create_sale(%L::jsonb, %L, null, 999999999, null, null, null, null, null, gen_random_uuid())',
+           jsonb_build_array(jsonb_build_object('code', v_barcode)), 'cash'),
     'invalid_discount:%');
+  -- Default staff limit is 0%: any staff discount needs approval.
+  perform pg_temp.expect_fail('G9d staff discount needs approval',
+    format('select public.pos_create_sale(%L::jsonb, %L, null, 100, null, null, null, null, null, gen_random_uuid())',
+           jsonb_build_array(jsonb_build_object('code', v_barcode)), 'cash'),
+    'discount_approval_required:%');
 
+  perform pg_temp.as_user(c_admin);
   v_req := gen_random_uuid();
-  v_sale := public.pos_create_sale(array[v_barcode, '3569 3803 5643 833'], 'card', 50000, 'gt-fixture', '0771234567', null, v_req);
+  v_sale := public.pos_create_sale(jsonb_build_array(jsonb_build_object('code', v_barcode), jsonb_build_object('code', '3569 3803 5643 833')),
+                                   'card', null, 50000, 'gt-fixture', '0771234567', null, null, null, v_req);
   v_total := 300000 + 25000000 - 50000;
   if (v_sale ->> 'total_cents')::bigint <> v_total or v_sale ->> 'bill_number' !~ '^POS-[0-9]{6}-[0-9]{5}$' then
     raise exception 'G9 FAILED - bill %', v_sale;
   end if;
-  if pg_temp.stock_of('gt-case') <> 3 or pg_temp.stock_of('gt-phone') <> 4 then
+  if pg_temp.stock_of('gt-case') <> 3 or pg_temp.stock_of('gt-phone') <> 3 then
     raise exception 'G9 FAILED - stock after POS case % phone %', pg_temp.stock_of('gt-case'), pg_temp.stock_of('gt-phone');
   end if;
   if (select count(*) from public.inventory_units where pos_sale_id = (v_sale ->> 'id')::uuid and status = 'sold') <> 2 then
     raise exception 'G9 FAILED - units not marked sold';
   end if;
-  v_res := public.pos_create_sale(array[v_barcode], 'cash', 0, null, null, null, v_req);
+  v_res := public.pos_create_sale(jsonb_build_array(jsonb_build_object('code', v_barcode), jsonb_build_object('code', '3569 3803 5643 833')),
+                                  'card', null, 50000, 'gt-fixture', '0771234567', null, null, null, v_req);
   if not (v_res ->> 'replayed')::boolean then raise exception 'G9 FAILED - POS replay %', v_res; end if;
-  perform pg_temp.expect_fail('G9d sell again',
-    format('select public.pos_create_sale(array[%L], %L, 0, null, null, null, gen_random_uuid())', v_barcode, 'cash'),
+  perform pg_temp.expect_fail('G9e sell again',
+    format('select public.pos_create_sale(%L::jsonb, %L, null, 0, null, null, null, null, null, gen_random_uuid())',
+           jsonb_build_array(jsonb_build_object('code', v_barcode)), 'cash'),
     'unit_not_available:%');
-  raise notice 'G9 ok - scan by barcode or IMEI, server prices, discount, exactly those units sold, replay safe';
+  raise notice 'G9 ok - scan by barcode or IMEI, server prices, discount rule, exactly those units sold, replay safe';
 
-  -- G10 write-off and counter return --------------------------------------------
+  -- G10 write-off, return to quarantine, release, IMEI re-entry -------------------
   select id into v_unit from public.inventory_units where product_id = 'gt-case' and status = 'in_stock' limit 1;
+  perform pg_temp.as_user(c_staff);
   perform pg_temp.expect_fail('G10a staff write-off',
     format('select public.admin_write_off_units(array[%L::uuid], %L, %L)', v_unit, 'damage', 'cracked'),
     'insufficient_privilege:%');
@@ -344,37 +399,69 @@ begin
   if pg_temp.stock_of('gt-case') <> 2 or (select status from public.inventory_units where id = v_unit) <> 'written_off' then
     raise exception 'G10 FAILED - write-off';
   end if;
-  perform pg_temp.expect_fail('G10b write off a sold unit',
-    format('select public.admin_write_off_units(array[(select id from public.inventory_units where barcode = %L)], %L, %L)', v_barcode, 'damage', 'x x x'),
-    'unit_not_available:%');
 
+  -- The customer brings a counter sale back: quarantine, no stock, no money.
   select id into v_unit from public.inventory_units where barcode = v_barcode;
-  perform public.admin_return_pos_unit(v_unit, 'customer changed mind');
-  if pg_temp.stock_of('gt-case') <> 3 or (select status from public.inventory_units where id = v_unit) <> 'in_stock'
-     or (select returned_at from public.pos_sale_items where unit_id = v_unit) is null then
-    raise exception 'G10 FAILED - counter return';
+  v_res := public.admin_record_customer_return('pos', (v_sale ->> 'id')::uuid,
+    jsonb_build_array(jsonb_build_object('line_id', (select id from public.pos_sale_items where unit_id = v_unit), 'quantity', 1, 'condition', 'unverified')),
+    'changed mind', gen_random_uuid());
+  if pg_temp.stock_of('gt-case') <> 2 or (select status from public.inventory_units where id = v_unit) <> 'quarantined'
+     or exists (select 1 from public.customer_refunds where pos_sale_id = (v_sale ->> 'id')::uuid) then
+    raise exception 'G10 FAILED - return must quarantine, with no stock and no refund';
   end if;
-  raise notice 'G10 ok - admin write-off and counter return move units and stock; staff cannot write off';
+  perform pg_temp.expect_fail('G10b quarantined unit cannot be sold',
+    format('select public.pos_create_sale(%L::jsonb, %L, null, 0, null, null, null, null, null, gen_random_uuid())',
+           jsonb_build_array(jsonb_build_object('code', v_barcode)), 'cash'),
+    'unit_not_available:%');
+  perform public.admin_release_quarantine_units(array[v_unit], 'checked and sealed');
+  if pg_temp.stock_of('gt-case') <> 3 or (select status from public.inventory_units where id = v_unit) <> 'in_stock' then
+    raise exception 'G10 FAILED - release';
+  end if;
 
-  -- G11 untracked item keeps working as a number ----------------------------------
+  -- A refund is its own fact, capped at what was charged.
+  perform public.admin_record_customer_refund('pos', (v_sale ->> 'id')::uuid, null, 100000, 'cash', null, null, gen_random_uuid());
+  if pg_temp.stock_of('gt-case') <> 3 then raise exception 'G10 FAILED - a refund moved stock'; end if;
+  perform pg_temp.expect_fail('G10c refund above the bill',
+    format('select public.admin_record_customer_refund(%L, %L::uuid, null, %s, %L, null, null, gen_random_uuid())',
+           'pos', v_sale ->> 'id', v_total, 'cash'),
+    'refund_exceeds_paid:%');
+
+  -- A sold IMEI can come back only with a stated reason, and gets a new barcode.
+  perform pg_temp.expect_fail('G10d re-entry without a reason',
+    format('select pg_temp.receive(%L::date, %L::jsonb)', v_today,
+      jsonb_build_array(pg_temp.line('gt-phone', c_va, 1, 100, jsonb_build_array('356938035643833')))),
+    'serial_previously_recorded:%');
+  raise notice 'G10 ok - write-off, quarantine, release, separate refund, IMEI re-entry guarded';
+
+  -- G11 quantity item works as a number, with holds ---------------------------------
   perform pg_temp.as_user(c_customer);
   v_order := public.place_order('[{"product_id":"gt-legacy","quantity":2}]'::jsonb, 'gt-fixture');
   perform pg_temp.as_user(c_staff);
-  if pg_temp.stock_of('gt-legacy') <> 3 then raise exception 'G11 FAILED - legacy order stock %', pg_temp.stock_of('gt-legacy'); end if;
+  if pg_temp.stock_of('gt-legacy') <> 5
+     or (select available from public.catalog_availability() a where a.product_id = 'gt-legacy' and a.variant_id is null) <> 3 then
+    raise exception 'G11 FAILED - a hold must lower availability only';
+  end if;
+  perform pg_temp.as_user(c_admin);
+  perform pg_temp.expect_fail('G11a adjust below holds',
+    $q$select public.admin_set_stock('gt-legacy', null, 5, 1, 'stock_count', 'count', gen_random_uuid())$q$,
+    'stock_reserved:%');
+  perform pg_temp.as_user(c_staff);
   update public.orders set status = 'cancelled' where id = (v_order ->> 'id')::uuid;
-  if pg_temp.stock_of('gt-legacy') <> 5 then raise exception 'G11 FAILED - legacy cancel stock %', pg_temp.stock_of('gt-legacy'); end if;
-  raise notice 'G11 ok - untracked items: order takes the number, cancel returns it';
+  if (select available from public.catalog_availability() a where a.product_id = 'gt-legacy' and a.variant_id is null) <> 5 then
+    raise exception 'G11 FAILED - cancel did not release the hold';
+  end if;
+  raise notice 'G11 ok - quantity items hold without moving the number; stock cannot go below holds';
 
-  -- G12 the invariant: tracked stock == shelf units, ledger sums to stock ------------
-  if pg_temp.stock_of('gt-phone') <> (select count(*) from public.inventory_units where product_id = 'gt-phone' and status = 'in_stock')
-     or pg_temp.stock_of('gt-case') <> (select count(*) from public.inventory_units where product_id = 'gt-case' and status = 'in_stock') then
-    raise exception 'G12 FAILED - stock and shelf units disagree';
+  -- G12 the invariant: tracked number = units in the shop, ledger sums to the number --
+  if pg_temp.stock_of('gt-phone') <> (select count(*) from public.inventory_units where product_id = 'gt-phone' and status in ('in_stock', 'reserved'))
+     or pg_temp.stock_of('gt-case') <> (select count(*) from public.inventory_units where product_id = 'gt-case' and status in ('in_stock', 'reserved')) then
+    raise exception 'G12 FAILED - stock and shop units disagree';
   end if;
   if (select sum(delta) from public.inventory_movements where product_id = 'gt-phone') <> pg_temp.stock_of('gt-phone')
      or (select sum(delta) from public.inventory_movements where product_id = 'gt-case') <> pg_temp.stock_of('gt-case') then
     raise exception 'G12 FAILED - ledger does not sum to stock';
   end if;
-  raise notice 'G12 ok - for tracked items, stock = units on the shelf = sum of the ledger';
+  raise notice 'G12 ok - for tracked items, stock = units in the shop = sum of the ledger';
 end $$;
 
 rollback;
@@ -384,6 +471,9 @@ rollback;
 -- Remove the committed fixtures (the checks above were rolled back).
 begin;
 delete from public.inventory_movements where product_id like 'gt-%';
+delete from public.customer_return_items where product_id like 'gt-%';
+delete from public.quarantine_lots where product_id like 'gt-%';
+delete from public.stock_reservations where product_id like 'gt-%';
 delete from public.inventory_units where product_id like 'gt-%';
 delete from public.grn_lines where product_id like 'gt-%';
 delete from public.grns where supplier_name like 'gt-%';

@@ -327,6 +327,10 @@ S('');
 // Products WITH variants get no condition rows: a variant with no row is Brand
 // New, which is what every bundled variant is.
 // ---------------------------------------------------------------------------
+// Same trap as below: these two migration updates find no categories locally.
+S('-- ---------- category tracking rules (mirror migrations 20261028120000 + 20261101100000) ----------');
+S(`update public.categories set requires_serial = true where slug = 'iphone';`);
+S(`update public.categories set default_tracking_mode = 'unit' where slug in ('iphone', 'ipad', 'mac', 'watch', 'airpods');`);
 S('-- ---------- derived condition / warranty rows (mirror migrations 20261002120000 + 20261003120000) ----------');
 S(`update public.products
    set warranty_type = case when warranty_status = 'active' then 'included' else 'none' end

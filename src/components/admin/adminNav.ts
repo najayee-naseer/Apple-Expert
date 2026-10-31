@@ -14,6 +14,7 @@ import {
   ClipboardList,
   Undo2,
   Wallet,
+  RotateCcw,
   Users,
   Settings,
   type LucideIcon,
@@ -25,6 +26,8 @@ export interface AdminNavItem {
   icon: LucideIcon
   /** Shown under the label in the mobile drawer. */
   hint: string
+  /** Hidden from staff. A convenience only: the database is what refuses them. */
+  adminOnly?: boolean
 }
 
 /** A collapsible sidebar section holding several pages. */
@@ -56,11 +59,12 @@ export const ADMIN_NAV: AdminNavEntry[] = [
       { href: '/admin/grn',               label: 'Good Receive Notice', icon: PackagePlus,   hint: 'Goods received, barcodes' },
       { href: '/admin/purchase-orders',   label: 'Purchase Orders',     icon: ClipboardList, hint: 'Orders to suppliers' },
       { href: '/admin/supplier-returns',  label: 'Supplier Returns',    icon: Undo2,         hint: 'Items sent back' },
-      { href: '/admin/supplier-payments', label: 'Supplier Payments',   icon: Wallet,        hint: 'Money paid to suppliers' },
+      { href: '/admin/supplier-payments', label: 'Supplier Payments',   icon: Wallet,        hint: 'Money paid to suppliers', adminOnly: true },
     ],
   },
   { href: '/admin/inventory',     label: 'Inventory',     icon: Boxes,           hint: 'Units on the shelf' },
   { href: '/admin/pos',           label: 'Shop counter',  icon: ScanBarcode,     hint: 'Scan and bill (POS)' },
+  { href: '/admin/returns',       label: 'Customer returns', icon: RotateCcw,    hint: 'Goods back, money back' },
   { href: '/admin/categories',    label: 'Categories',    icon: FolderTree,      hint: 'How products are grouped' },
   { href: '/admin/pricing',       label: 'Pricing',       icon: Tags,            hint: 'Retail and VIP prices' },
   { href: '/admin/vip-customers', label: 'VIP Customers', icon: Crown,           hint: 'Wholesale designation' },
@@ -69,6 +73,13 @@ export const ADMIN_NAV: AdminNavEntry[] = [
   { href: '/admin/users',         label: 'Users',         icon: Users,           hint: 'Accounts and roles' },
   { href: '/admin/settings',      label: 'Settings',      icon: Settings,        hint: 'Store configuration' },
 ]
+
+/** The sidebar a role sees. Groups keep only the pages that role may open. */
+export function navForRole(isAdmin: boolean): AdminNavEntry[] {
+  return ADMIN_NAV.map((entry) => (isNavGroup(entry)
+    ? { ...entry, children: entry.children.filter((c) => isAdmin || !c.adminOnly) }
+    : entry))
+}
 
 /** Exact-match for the dashboard, prefix-match for the rest. */
 export function isAdminNavActive(pathname: string, href: string): boolean {

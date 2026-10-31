@@ -1,72 +1,92 @@
-# GRN, barcoded inventory and the shop counter
+# GRN, inventory, the shop counter and returns
 
-Every physical item has its own identity. Stock for a barcode-tracked product is
-always the number of its units on the shelf.
+Rollout steps are in [inventory-cutover-plan.md](inventory-cutover-plan.md).
+
+Stock has two forms, chosen per stock holder and changed only by an admin:
+
+- **Quantity tracked:** a number. Ordinary accessories.
+- **Individually tracked:** every item is a barcoded unit. Apple devices and selected parts.
+
+The stock number means sellable stock physically in the shop, including items held
+for online orders. **Available = on hand − active holds.**
 
 ```
-Delivery arrives ──► GRN (Admin → GRN → New GRN)
-                        │  one unit per item, barcode AE00000001, AE00000002 …
-                        │  phones: one IMEI per unit (scan the box barcode)
-                        ▼
-                 Print labels (sticker 50×30 mm, or A4 sheet of 24)
-                        │  each label: QR + Code 128 + name + IMEI
+Delivery arrives ──► Goods Received (received = accepted + rejected)
+                        │  accepted items enter stock; rejected are recorded, never owed
+                        │  individually tracked: one barcode per item, IMEI where required
                         ▼
                     in_stock
           ┌─────────────┴──────────────┐
-  online order                     shop counter (Admin → Shop counter)
-  oldest unit reserved (FIFO)      scan label or IMEI → bill → sold
-  shipped/delivered → sold         reprint bill any time
-  cancelled/refunded → back
+  online order                     shop counter
+  held (FIFO), number unmoved      scan label or IMEI, or add by product → bill → sold
+  48 h unconfirmed → released
+  confirmed / processing → held, never expires
+  first shipped or delivered → sold, deducted exactly once
+  cancelled before shipping → released
+  cancelled after shipping → nothing restored
+
+  customer return → quarantine → verified: in_stock, or written off
 ```
 
 ## Screens
 
 | Screen | Who | What |
 |---|---|---|
-| **GRN** `/admin/grn` | owner, admin post · staff view | Record a delivery: supplier, invoice, date, and per product the variant, quantity, cost and IMEIs. Posting creates the units and raises stock. Open any GRN to print its labels. |
-| **Inventory** `/admin/inventory` | staff view · owner, admin act | Stock by product (on shelf / reserved / sold / written off, oldest unit date). Units tab: find by barcode or IMEI, reprint labels, write off damaged or mistaken units, take back a counter sale. |
-| **Shop counter** `/admin/pos` | owner, admin, staff | Scan with a USB/Bluetooth scanner (it types the code and Enter) or the phone camera. Price is the live retail price from the database; one bill-level discount. Completing the sale opens the 80 mm bill PDF. |
-| **Orders** (existing) | — | An order now shows **Units to pack**: the exact barcodes reserved for it. |
+| **Good Receive Notice** `/admin/grn` | owner, admin post · staff view without costs | Supplier delivery, counted opening stock, or buy-back. Records received, accepted and rejected with a reason. Blank cost is never zero: state it or mark it pending. Correct goods received by mistake here. |
+| **Inventory** `/admin/inventory` | staff view · owner, admin act | One trusted figure per stock holder: in shop, available, reserved, sold, quarantine, returned. Units tab: find by barcode or IMEI, labels, write-off, quarantine. Quarantine tab: verify or write off. |
+| **Shop counter** `/admin/pos` | owner, admin, staff | Scan with a USB/Bluetooth scanner, the camera or by typing. Add quantity items by product. Attach an account for wholesale prices. Discounts above the limit need approval, for that bill. |
+| **Customer returns** `/admin/returns` | owner, admin record · staff view | Goods back go to quarantine. Money back is a separate record. |
+| **Orders** (existing) | — | Shows the order's stock state and **Units to pack**. |
+| **Settings** | owner, admin | Customer hold limits and the staff discount limit. |
 
-Customers never see a barcode or IMEI; those tables are readable by staff only.
+Customers never see a barcode or IMEI. Staff never see purchase costs: those columns
+are not granted to browser sessions, and owner/admin read them through checked functions.
 
 ## Rules worth knowing
 
-- A product becomes barcode-tracked at its first GRN. After that, **Adjust stock is
-  refused** for it — stock comes in by GRN and goes out by sale or write-off.
-- A GRN is refused while the product still has untracked stock (a number with no
-  units). Set it to 0 with Adjust stock (stock count), then receive the items by GRN
-  so every one gets a label.
-- iPhone category has `requires_serial` on: every unit needs a unique IMEI, and a
-  15-digit IMEI must pass the check digit.
-- Posting a GRN, completing a sale and every other write is safe to retry: the same
-  request is applied once.
+- Switching a holder to individual tracking needs zero stock: count it, set it to 0,
+  switch, then receive the items as Opening stock so each gets a label.
+- Adjust stock works on quantity-tracked holders only, and cannot go below active holds.
+- An own-stock variant has its own number and mode, whatever its siblings do.
+- An IMEI can be in the shop only once. One recorded earlier can come back (repair,
+  buy-back, a corrected GRN) only with a stated reason; it gets a new barcode, and
+  history is kept.
+- Every create is safe to retry: the same request returns the first result, and the
+  same request id with different content is refused.
+- The same invoice from the same supplier is refused as a possible duplicate, unless a
+  person confirms it with a note.
+
+## Reservation expiry
+
+Without pg_cron or pg_net. Overdue holds stop counting at once, every stock-taking path
+releases overdue orders for the products it touches, and the Inventory screen runs
+`expire_pending_orders()` on load. The `expire-reservations` edge function lets an
+external scheduler keep order statuses current too; setting one up is optional.
 
 ## Database
 
-Migration `supabase/migrations/20261028120000_grn_barcode_units_and_pos.sql`,
-verified by `supabase/tests/verify_grn_units_pos.sql` (12 checks, ends with
-`ALL GRN / UNIT / POS CHECKS PASSED`).
+Migrations `20261028120000`, `20261028160000` and `20261101100000` to `20261101130000`.
+Verified by `supabase/tests/verify_grn_units_pos.sql`, `verify_purchase_returns.sql`,
+`verify_inventory_master.sql` and `verify_inventory_master_concurrency.sh`.
 
 ## Android
 
-`CAMERA` permission added for camera scanning at the counter. Rebuild the APK
-(`npm run build && npx cap sync android`) and bump the version.
+`CAMERA` permission for scanning. Labels and bills go through the system share sheet in
+the APK, via `@capacitor/filesystem` and `@capacitor/share`, because a WebView cannot
+open or download a PDF itself. Typing a code always works where the camera does not.
 
 # Purchase & Returns
 
-Sidebar group **Purchase & Returns** holds five pages:
+Sidebar group **Purchase & Returns**:
 
 | Page | What it does |
 |---|---|
-| **Supplier Details** `/admin/suppliers` | Add / edit suppliers (name, contact, phone, email, address, opening balance). View one to see its GRNs, returns, payments and the amount owed. Deactivate instead of deleting. |
-| **Good Receive Notice** `/admin/grn` | Receive goods from a chosen supplier, optionally against a purchase order (its open lines are filled in). Same barcodes and labels as before. |
-| **Purchase Orders** `/admin/purchase-orders` | Order from a supplier; receive deliveries against it (status Open → Partly received → Received); close the rest when it will not come. |
-| **Supplier Returns** `/admin/supplier-returns` | Scan shelf items to send back. Cash = supplier refunded money; Credit = deducted from what you owe. Stock falls; the units become *Returned to supplier*. |
-| **Supplier Payments** `/admin/supplier-payments` | Record money paid (cash, bank transfer, cheque, card). Mistakes are voided, not deleted. Owner/admin only. |
+| **Supplier Details** `/admin/suppliers` | Suppliers, opening balance with an audit note, and for owner/admin a statement of every transaction. Deactivate instead of deleting. |
+| **Good Receive Notice** `/admin/grn` | See above. Against a PO, its open lines are filled in and over-receiving is refused. |
+| **Purchase Orders** `/admin/purchase-orders` | Order from a supplier; receive against it (Open → Partly received → Received); close the rest when it will not come. |
+| **Supplier Returns** `/admin/supplier-returns` | Scan units from the shelf or quarantine, or enter quantities per delivery. Cash = money handed back; Credit = deducted from what you owe. A mistake is reversed, and the record stays. |
+| **Supplier Payments** `/admin/supplier-payments` | Money paid, optionally applied to GRNs. Mistakes are voided, not deleted. Owner/admin only. |
 
-**Amount owed to a supplier** = opening balance + GRNs received − credit returns − payments.
-
-Database: `supabase/migrations/20261028160000_suppliers_purchase_orders_returns_payments.sql`,
-verified by `supabase/tests/verify_purchase_returns.sql` (10 checks, ends with
-`ALL PURCHASE & RETURNS CHECKS PASSED`).
+**Amount owed** = opening balance + accepted goods at stated cost − GRN corrections −
+credit returns − payments. Lines with a pending cost are not included, and the screen
+says how many there are.

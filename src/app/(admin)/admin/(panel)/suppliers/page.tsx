@@ -11,9 +11,9 @@ import { useAdminAuth } from '@/context/AdminAuthContext'
 import { getSupabaseClient } from '@/lib/supabase/client'
 import { formatDate } from '@/lib/admin/units'
 import {
-  listSuppliers, saveSupplier, loadSupplierBalances, canManagePurchasing, describePurchasingError,
-  formatRupeesFromCents, returnTypeLabel, supplierPaymentMethodLabel,
-  type SupplierRow, type SupplierBalance,
+  listSuppliers, saveSupplier, loadSupplierBalances, loadSupplierStatement, canManagePurchasing, describePurchasingError,
+  formatRupeesFromCents, returnTypeLabel,
+  type SupplierRow, type SupplierBalance, type StatementRow,
 } from '@/lib/admin/purchasing'
 
 export default function SuppliersPage() {
@@ -93,6 +93,7 @@ export default function SuppliersPage() {
 
       {editing && (
         <SupplierEditor supplier={editing === 'new' ? null : editing}
+          currentOpening={editing === 'new' ? null : balances.get(editing.id)?.openingCents ?? null}
           onClose={() => setEditing(null)}
           onSaved={(name, isNew) => { setEditing(null); setNotice(`${name} ${isNew ? 'added' : 'saved'}.`); refresh() }} />
       )}
@@ -105,8 +106,10 @@ export default function SuppliersPage() {
   )
 }
 
-function SupplierEditor({ supplier, onClose, onSaved }: {
+function SupplierEditor({ supplier, currentOpening, onClose, onSaved }: {
   supplier: SupplierRow | null
+  /** Staff cannot read this: only owner/admin ever reach the editor. */
+  currentOpening: number | null
   onClose: () => void
   onSaved: (name: string, isNew: boolean) => void
 }) {
@@ -116,21 +119,27 @@ function SupplierEditor({ supplier, onClose, onSaved }: {
   const [email, setEmail] = useState(supplier?.email ?? '')
   const [address, setAddress] = useState(supplier?.address ?? '')
   const [note, setNote] = useState(supplier?.note ?? '')
-  const [opening, setOpening] = useState(supplier ? String(supplier.opening_balance_cents / 100) : '')
+  const [opening, setOpening] = useState(currentOpening === null ? '' : String(currentOpening / 100))
+  const [openingNote, setOpeningNote] = useState('')
   const [active, setActive] = useState(supplier?.is_active ?? true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   async function submit() {
     if (name.trim().length < 2) { setError('Enter the supplier name.'); return }
-    const openingCents = parseRupees(opening)
-    if (openingCents === null) { setError('The opening balance must be an amount in rupees.'); return }
+    // Blank means none entered yet, never zero.
+    const openingCents = opening.trim() === '' ? null : parseRupees(opening)
+    if (opening.trim() !== '' && openingCents === null) { setError('The opening balance must be an amount in rupees.'); return }
+    if (supplier && openingCents !== currentOpening && openingNote.trim().length < 3) {
+      setError('Say why the opening balance is changing: it is kept in the audit trail.')
+      return
+    }
     setBusy(true)
     setError(null)
     try {
       const saved = await saveSupplier({
         id: supplier?.id ?? null, name: name.trim(), contactPerson: contact, phone, email, address, note,
-        openingBalanceCents: openingCents, isActive: active,
+        openingBalanceCents: openingCents, openingBalanceNote: openingNote.trim(), isActive: active,
       })
       onSaved(saved.name, !supplier)
     } catch (err) {
@@ -156,7 +165,10 @@ function SupplierEditor({ supplier, onClose, onSaved }: {
       <TextField id="sup-email" label="Email" hint="optional" value={email} disabled={busy} onChange={setEmail} />
       <TextAreaField id="sup-address" label="Address (optional)" rows={2} value={address} disabled={busy} onChange={setAddress} />
       <TextField id="sup-opening" label="Opening balance (Rs.)" hint="what you already owed before using this app"
-        value={opening} disabled={busy} placeholder="0" onChange={setOpening} />
+        value={opening} disabled={busy} placeholder="Leave blank if not known yet" onChange={setOpening} />
+      {supplier && (opening.trim() === '' ? null : parseRupees(opening)) !== currentOpening && (
+        <TextField id="sup-opening-note" label="Why is the opening balance changing?" value={openingNote} disabled={busy} onChange={setOpeningNote} />
+      )}
       <TextAreaField id="sup-note" label="Note (optional)" rows={2} value={note} disabled={busy} onChange={setNote} />
       {supplier && (
         <CheckboxField id="sup-active" label="Active" checked={active} disabled={busy} onChange={setActive}
@@ -168,9 +180,8 @@ function SupplierEditor({ supplier, onClose, onSaved }: {
 }
 
 interface Activity {
-  grns: { id: string; grn_number: string; received_on: string; total_cost_cents: number; total_units: number }[]
-  returns: { id: string; return_number: string; return_date: string; return_type: string; total_cents: number }[]
-  payments: { id: string; payment_number: string; paid_on: string; amount_cents: number; method: string; voided_at: string | null }[]
+  grns: { id: string; grn_number: string; received_on: string; total_units: number }[]
+  returns: { id: string; return_number: string; return_date: string; return_type: string }[]
 }
 
 function SupplierView({ supplier, balance, showMoney, onClose, onEdit }: {
@@ -181,26 +192,30 @@ function SupplierView({ supplier, balance, showMoney, onClose, onEdit }: {
   onEdit?: () => void
 }) {
   const [activity, setActivity] = useState<Activity | null>(null)
+  const [statement, setStatement] = useState<StatementRow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    const supabase = getSupabaseClient()
-    Promise.all([
-      supabase.from('grns').select('id, grn_number, received_on, total_cost_cents, total_units')
-        .eq('supplier_id', supplier.id).order('received_on', { ascending: false }).limit(20),
-      supabase.from('supplier_returns').select('id, return_number, return_date, return_type, total_cents')
-        .eq('supplier_id', supplier.id).order('return_date', { ascending: false }).limit(20),
-      showMoney
-        ? supabase.from('supplier_payments').select('id, payment_number, paid_on, amount_cents, method, voided_at')
-          .eq('supplier_id', supplier.id).order('paid_on', { ascending: false }).limit(20)
-        : Promise.resolve({ data: [], error: null }),
-    ]).then(([g, r, p]) => {
-      if (cancelled) return
-      const firstError = g.error ?? r.error ?? p.error
-      if (firstError) { setError(describePurchasingError(firstError, 'Could not load the history.')); return }
-      setActivity({ grns: g.data ?? [], returns: r.data ?? [], payments: (p.data ?? []) as Activity['payments'] })
-    })
+    if (showMoney) {
+      // The statement carries every transaction with its amount; only owner/admin may call it.
+      loadSupplierStatement(supplier.id)
+        .then((rows) => { if (!cancelled) setStatement(rows) })
+        .catch((err) => { if (!cancelled) setError(describePurchasingError(err, 'Could not load the history.')) })
+    } else {
+      const supabase = getSupabaseClient()
+      Promise.all([
+        supabase.from('grns').select('id, grn_number, received_on, total_units')
+          .eq('supplier_id', supplier.id).order('received_on', { ascending: false }).limit(20),
+        supabase.from('supplier_returns').select('id, return_number, return_date, return_type')
+          .eq('supplier_id', supplier.id).order('return_date', { ascending: false }).limit(20),
+      ]).then(([g, r]) => {
+        if (cancelled) return
+        const firstError = g.error ?? r.error
+        if (firstError) { setError(describePurchasingError(firstError, 'Could not load the history.')); return }
+        setActivity({ grns: g.data ?? [], returns: r.data ?? [] })
+      })
+    }
     return () => { cancelled = true }
   }, [supplier.id, showMoney])
 
@@ -221,7 +236,7 @@ function SupplierView({ supplier, balance, showMoney, onClose, onEdit }: {
         <section className={`${card} space-y-1.5 text-[13px]`}>
           <h3 className="mb-1 text-[14px] font-bold">Account</h3>
           {[
-            ['Opening balance', balance.openingCents, ''],
+            ['Opening balance', balance.openingCents ?? 0, ''],
             ['Goods received (GRN)', balance.purchasesCents, '+'],
             ['Credit returns', balance.creditReturnsCents, '−'],
             ['Payments', balance.paymentsCents, '−'],
@@ -234,6 +249,14 @@ function SupplierView({ supplier, balance, showMoney, onClose, onEdit }: {
           <div className="flex justify-between border-t border-mint/70 dark:border-border pt-2 text-[15px] font-bold">
             <span>Amount owed</span><span className="tabular-nums">{formatRupeesFromCents(balance.balanceCents)}</span>
           </div>
+          {balance.openingCents === null && (
+            <p className="text-[11.5px] text-muted-foreground">No opening balance has been entered for this supplier.</p>
+          )}
+          {balance.pendingCostLines > 0 && (
+            <p className="text-[11.5px] font-semibold text-amber-600 dark:text-amber-400">
+              {balance.pendingCostLines} GRN line{balance.pendingCostLines === 1 ? ' has' : 's have'} no cost yet, so this figure is understated.
+            </p>
+          )}
           {balance.cashReturnsCents > 0 && (
             <p className="text-[11.5px] text-muted-foreground">Cash returns ({formatRupeesFromCents(balance.cashReturnsCents)}) were paid back in cash and are not deducted.</p>
           )}
@@ -241,17 +264,23 @@ function SupplierView({ supplier, balance, showMoney, onClose, onEdit }: {
       )}
 
       {error && <ErrorNote message={error} />}
-      {!activity && !error && <p className="py-6 text-center text-sm text-muted-foreground">Loading history…</p>}
+      {!activity && !statement && !error && <p className="py-6 text-center text-sm text-muted-foreground">Loading history…</p>}
+      {statement && (
+        <HistoryList title="Statement" empty="No transactions yet."
+          items={statement.map((row, i) => ({
+            id: `${row.reference}-${i}`,
+            left: row.reference,
+            sub: `${formatDate(row.occurredOn)} · ${row.description}`,
+            right: row.debitCents > 0 ? `+ ${formatRupeesFromCents(row.debitCents)}`
+              : row.creditCents > 0 ? `− ${formatRupeesFromCents(row.creditCents)}` : '—',
+          }))} />
+      )}
       {activity && (
         <>
           <HistoryList title="Goods received" empty="No GRNs yet."
-            items={activity.grns.map((g) => ({ id: g.id, left: g.grn_number, sub: `${formatDate(g.received_on)} · ${g.total_units} units`, right: showMoney ? formatRupeesFromCents(g.total_cost_cents) : '' }))} />
+            items={activity.grns.map((g) => ({ id: g.id, left: g.grn_number, sub: `${formatDate(g.received_on)} · ${g.total_units} units`, right: '' }))} />
           <HistoryList title="Returns" empty="No returns."
-            items={activity.returns.map((r) => ({ id: r.id, left: r.return_number, sub: `${formatDate(r.return_date)} · ${returnTypeLabel(r.return_type)}`, right: showMoney ? formatRupeesFromCents(r.total_cents) : '' }))} />
-          {showMoney && (
-            <HistoryList title="Payments" empty="No payments."
-              items={activity.payments.map((p) => ({ id: p.id, left: p.payment_number + (p.voided_at ? ' (void)' : ''), sub: `${formatDate(p.paid_on)} · ${supplierPaymentMethodLabel(p.method)}`, right: formatRupeesFromCents(p.amount_cents) }))} />
-          )}
+            items={activity.returns.map((r) => ({ id: r.id, left: r.return_number, sub: `${formatDate(r.return_date)} · ${returnTypeLabel(r.return_type)}`, right: '' }))} />
         </>
       )}
     </AdminDrawer>

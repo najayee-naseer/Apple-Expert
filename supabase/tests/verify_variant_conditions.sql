@@ -46,7 +46,7 @@ declare
   v_count integer;
   v_res   jsonb;
   v_item  public.order_items;
-  v1 uuid; v2 uuid; v3 uuid; v4 uuid; other_variant uuid;
+  v1 uuid; v2 uuid; v3 uuid; v4 uuid; other_variant uuid; v_del uuid; plan_del uuid;
   plan_product uuid; plan_v2 uuid; plan_v3 uuid;
   opt_p12 uuid; opt_v2_3 uuid; opt_v2_6 uuid;
   price_v2 bigint; price_v1 bigint; price_v4 bigint;
@@ -257,15 +257,31 @@ begin
   if v_count <> 1 then raise exception 'V10 FAILED - a variant row was mirrored to the product'; end if;
   raise notice 'V10 ok - admin manages conditions/images; product-level rows mirror to legacy columns, variant rows never do';
 
-  -- V11 - deleting a variant removes its own condition, plan and images only -------
-  delete from public.product_variants where id = v2;
-  select count(*) into v_count from public.product_conditions where variant_id = v2;
+  -- V11 - a variant that has been ordered keeps its history and cannot be deleted
+  -- (20261101100000: stock_reservations restricts it); one with no history can,
+  -- and only its own condition, plan and images go with it.
+  begin
+    delete from public.product_variants where id = v2;
+    raise exception 'V11 FAILED - a variant with order history was deleted';
+  exception when foreign_key_violation then
+    null;
+  end;
+  insert into public.product_variants (product_id, legacy_key, name)
+  values ('iphone-17-pro-max', 'v-del', 'No history') returning id into v_del;
+  insert into public.product_conditions (product_id, variant_id, condition) values ('iphone-17-pro-max', v_del, 'pre_owned');
+  insert into public.product_warranty_plans (product_id, variant_id, warranty_type, warranty_title)
+  values ('iphone-17-pro-max', v_del, 'optional_paid', 'Temp cover') returning id into plan_del;
+  insert into public.product_images (product_id, variant_id, path) values ('iphone-17-pro-max', v_del, 'iphone-17-pro-max/temp.jpg');
+  delete from public.product_variants where id = v_del;
+  select count(*) into v_count from public.product_conditions where variant_id = v_del;
   if v_count <> 0 then raise exception 'V11 FAILED - variant condition survived its variant'; end if;
-  select count(*) into v_count from public.product_warranty_plans where id = plan_v2;
+  select count(*) into v_count from public.product_warranty_plans where id = plan_del;
   if v_count <> 0 then raise exception 'V11 FAILED - variant plan survived its variant'; end if;
+  select count(*) into v_count from public.product_images where variant_id = v_del;
+  if v_count <> 0 then raise exception 'V11 FAILED - variant image survived its variant'; end if;
   select count(*) into v_count from public.product_warranty_plans where id = plan_product;
   if v_count <> 1 then raise exception 'V11 FAILED - the product plan was removed with a variant'; end if;
-  raise notice 'V11 ok - a variant''s condition, plan and images go with it; the product plan stays';
+  raise notice 'V11 ok - ordered variants are kept; otherwise its condition, plan and images go with it; the product plan stays';
 
   raise notice 'ALL VARIANT CONDITION CHECKS PASSED';
 end;

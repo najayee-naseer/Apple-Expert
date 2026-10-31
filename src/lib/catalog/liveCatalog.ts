@@ -117,6 +117,8 @@ interface VariantOverlay {
   colorCode: string | null
   storage: string | null
   sortOrder: number
+  /** What can be bought of this exact variant. undefined on a database without it. */
+  available?: number
 }
 
 /** One product_conditions row, mapped for the storefront. */
@@ -351,7 +353,7 @@ export async function fetchLiveCatalog(): Promise<LiveCatalogData> {
 
   const [
     tier, productsResult, variantsResult, specsResult, imagesResult,
-    compatibilityResult, categoriesResult, pricesResult, featuredResult,
+    compatibilityResult, categoriesResult, pricesResult, featuredResult, availabilityResult,
   ] =
     await Promise.all([
       fetchCallerTier(),
@@ -376,6 +378,8 @@ export async function fetchLiveCatalog(): Promise<LiveCatalogData> {
         .eq('slot', 'home')
         .eq('is_active', true)
         .order('position', { ascending: true }),
+      // Non-fatal like featured: a database without it falls back to products.stock.
+      supabase.rpc('catalog_availability'),
     ])
 
   if (productsResult.error) throw productsResult.error
@@ -387,11 +391,20 @@ export async function fetchLiveCatalog(): Promise<LiveCatalogData> {
   if (pricesResult.error) throw pricesResult.error
   // featuredResult is intentionally NOT thrown on — see featuredIds above.
 
+  // Availability = stock minus online holds, per exact option. products.stock
+  // alone would ignore holds and hide an empty variant behind a shared pool.
+  const productAvailable = new Map<string, number>()
+  const variantAvailable = new Map<string, number>()
+  for (const row of (availabilityResult.error ? null : availabilityResult.data) ?? []) {
+    if (row.variant_id === null) productAvailable.set(row.product_id, row.available)
+    else if (row.legacy_key) variantAvailable.set(`${row.product_id}:${row.legacy_key}`, row.available)
+  }
+
   const activeIds = new Set<string>()
   const product = new Map<string, ProductOverlay>()
   for (const row of productsResult.data ?? []) {
     activeIds.add(row.id)
-    product.set(row.id, row as ProductOverlay)
+    product.set(row.id, { ...(row as ProductOverlay), stock: productAvailable.get(row.id) ?? row.stock })
   }
 
   // Variant ids are UUIDs in the database but 'v1', 'v2' … in the bundled data.
@@ -411,6 +424,7 @@ export async function fetchLiveCatalog(): Promise<LiveCatalogData> {
       colorCode: row.color_code,
       storage: row.storage,
       sortOrder: row.sort_order,
+      available: variantAvailable.get(`${row.product_id}:${row.legacy_key}`),
     })
     variants.set(row.product_id, list)
   }
@@ -542,6 +556,7 @@ function buildLiveVariants(
       color: row.color ?? undefined,
       colorCode: row.colorCode ?? undefined,
       storage: row.storage ?? undefined,
+      available: row.available,
     }
   })
 }
@@ -641,6 +656,7 @@ export function applyLiveCatalog(
           color: lv.color ?? undefined,
           colorCode: lv.colorCode ?? undefined,
           storage: lv.storage ?? undefined,
+          available: lv.available,
         }
       })
     } else if (product.variants && product.variants.length > 0) {

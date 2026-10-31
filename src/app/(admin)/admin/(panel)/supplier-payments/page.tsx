@@ -11,10 +11,10 @@ import { ErrorNote, SuccessNote, parseRupees } from '@/components/admin/inventor
 import { useAdminAuth } from '@/context/AdminAuthContext'
 import { todayInColombo, formatDate } from '@/lib/admin/units'
 import {
-  listSupplierPayments, recordSupplierPayment, voidSupplierPayment, listSuppliers, loadSupplierBalances,
+  listSupplierPayments, recordSupplierPayment, voidSupplierPayment, listSuppliers, loadSupplierBalances, loadOpenGrns,
   canManagePurchasing, describePurchasingError, formatRupeesFromCents, supplierPaymentMethodLabel, newRequestId,
   SUPPLIER_PAYMENT_METHODS,
-  type SupplierPaymentListItem, type SupplierRow, type SupplierBalance, type SupplierPaymentMethod,
+  type SupplierPaymentListItem, type SupplierRow, type SupplierBalance, type SupplierPaymentMethod, type OpenGrn,
 } from '@/lib/admin/purchasing'
 
 const CONTROL =
@@ -127,17 +127,39 @@ function PaymentCreator({ suppliers, balances, onClose, onCreated }: {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const [openGrns, setOpenGrns] = useState<OpenGrn[]>([])
+  const [allocations, setAllocations] = useState<Record<string, string>>({})
+
   const owed = supplierId ? balances.get(supplierId)?.balanceCents ?? 0 : null
+
+  useEffect(() => {
+    if (!supplierId) return
+    let cancelled = false
+    loadOpenGrns(supplierId)
+      .then((rows) => { if (!cancelled) setOpenGrns(rows) })
+      .catch((err) => { if (!cancelled) setError(describePurchasingError(err, 'Could not load this supplier\'s open GRNs.')) })
+    return () => { cancelled = true }
+  }, [supplierId])
 
   async function submit() {
     if (!supplierId) { setError('Choose the supplier.'); return }
     const cents = parseRupees(amount)
     if (cents === null || cents <= 0) { setError('Enter the amount paid.'); return }
     if (method === 'cheque' && !reference.trim()) { setError('Enter the cheque number.'); return }
+    const allocated: { grnId: string; amountCents: number }[] = []
+    for (const g of openGrns) {
+      const text = (allocations[g.grnId] ?? '').trim()
+      if (!text) continue
+      const value = parseRupees(text)
+      if (value === null || value <= 0) { setError(`${g.grnNumber}: enter an amount in rupees.`); return }
+      if (value > g.outstandingCents) { setError(`${g.grnNumber} has only ${formatRupeesFromCents(g.outstandingCents)} left to settle.`); return }
+      allocated.push({ grnId: g.grnId, amountCents: value })
+    }
+    if (allocated.reduce((sum, a) => sum + a.amountCents, 0) > cents) { setError('The amounts applied to GRNs are more than the payment.'); return }
     setBusy(true)
     setError(null)
     try {
-      const r = await recordSupplierPayment({ supplierId, paidOn, amountCents: cents, method, reference: reference.trim(), note: note.trim(), requestId })
+      const r = await recordSupplierPayment({ supplierId, paidOn, amountCents: cents, method, reference: reference.trim(), note: note.trim(), allocations: allocated, requestId })
       onCreated(r.replayed ? `${r.payment_number} had already been saved.` : `${r.payment_number} saved: ${formatRupeesFromCents(cents)} paid.`)
     } catch (err) {
       setError(describePurchasingError(err, 'The payment could not be saved.'))
@@ -155,7 +177,7 @@ function PaymentCreator({ suppliers, balances, onClose, onCreated }: {
       </>}>
       <label className="block">
         <FieldLabel>Supplier</FieldLabel>
-        <select className={CONTROL} value={supplierId} disabled={busy} onChange={(e) => { setSupplierId(e.target.value); setError(null) }}>
+        <select className={CONTROL} value={supplierId} disabled={busy} onChange={(e) => { setSupplierId(e.target.value); setOpenGrns([]); setAllocations({}); setError(null) }}>
           <option value="">Choose a supplier…</option>
           {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
@@ -186,6 +208,22 @@ function PaymentCreator({ suppliers, balances, onClose, onCreated }: {
       </label>
       <TextField id="pay-ref" label={method === 'cheque' ? 'Cheque number' : 'Reference'} hint={method === 'cheque' ? 'required' : 'optional · bank ref, receipt no.'}
         value={reference} disabled={busy} onChange={setReference} />
+      {openGrns.length > 0 && (
+        <section className="space-y-2 rounded-[22px] border border-mint/80 dark:border-border bg-surface p-4 shadow-card">
+          <h3 className="text-[14px] font-bold text-foreground">Apply to GRNs <span className="font-normal text-muted-foreground">(optional)</span></h3>
+          {openGrns.map((g) => (
+            <label key={g.grnId} className="flex items-center gap-3 text-[13px]">
+              <span className="min-w-0 flex-1">
+                <span className="block font-semibold">{g.grnNumber}{g.supplierInvoice ? ` · ${g.supplierInvoice}` : ''}</span>
+                <span className="block text-[11.5px] text-muted-foreground tabular-nums">{formatDate(g.receivedOn)} · {formatRupeesFromCents(g.outstandingCents)} left</span>
+              </span>
+              <input inputMode="decimal" aria-label={`Amount for ${g.grnNumber}`} className={cn(CONTROL, 'w-28 tabular-nums')} placeholder="Rs."
+                value={allocations[g.grnId] ?? ''} disabled={busy}
+                onChange={(e) => setAllocations((prev) => ({ ...prev, [g.grnId]: e.target.value }))} />
+            </label>
+          ))}
+        </section>
+      )}
       <TextAreaField id="pay-note" label="Note (optional)" rows={2} value={note} disabled={busy} onChange={setNote} />
       <p className="text-[11.5px] text-muted-foreground">Payments cannot be edited. A mistake is voided, and stays in the list for the record.</p>
       {error && <ErrorNote message={error} />}

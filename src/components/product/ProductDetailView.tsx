@@ -71,6 +71,9 @@ export function ProductDetailView({ productId }: { productId: string }) {
   }
 
   const selectedVariant = resolveVariant(product, selectedVariantId)
+  // The selected option's own availability, so a product is not shown as in stock
+  // merely because another colour or storage is.
+  const available = selectedVariant?.available ?? product.stock
   const currentPrice = selectedPrice(product, selectedVariant)
   // undefined unless the product sells a warranty choice; then the chosen
   // option, or the admin's default. A withdrawn option falls back to the default.
@@ -165,11 +168,11 @@ export function ProductDetailView({ productId }: { productId: string }) {
             <span className="text-muted-foreground text-sm">({product.reviewsCount} reviews)</span>
             {/* Real availability (it previously read "In Stock" regardless). */}
             {showStock && (
-              product.stock <= 0 ? (
+              available <= 0 ? (
                 <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-red-500">
                   <span className="w-1.5 h-1.5 rounded-full bg-red-500" /> Out of Stock
                 </span>
-              ) : product.stock <= 5 ? (
+              ) : available <= 5 ? (
                 <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-amber-600 dark:text-amber-400">
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-500" /> Low Stock
                 </span>
@@ -324,6 +327,8 @@ export function ProductDetailView({ productId }: { productId: string }) {
         title={product.name}
         price={formatPrice(unitTotal * quantity)}
         onAddToCart={() => addToCart(product, selectedVariant, quantity, warrantyOption)}
+        disabled={available <= 0}
+        ctaLabel={available <= 0 ? 'Out of Stock' : undefined}
       />
     </div>
   )

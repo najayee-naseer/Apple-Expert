@@ -9,7 +9,10 @@ import { X } from 'lucide-react'
  * Uses the browser's built-in BarcodeDetector (Chrome / Android WebView), so
  * no library is shipped. Reads the unit QR and the Code 128 bars, plus the
  * EAN / Code 128 on a phone box (its IMEI). Where the browser has no
- * BarcodeDetector the button is simply not shown.
+ * BarcodeDetector the button is simply not shown, and typing or a USB / Bluetooth
+ * scanner keeps working: the code box is always there.
+ *
+ * In the APK the WebView asks Android for the camera permission on first use.
  */
 
 interface DetectedCode { rawValue: string }
@@ -39,7 +42,14 @@ export function CameraScanner({ onCode, onClose }: { onCode: (code: string) => v
     let stopped = false
     let last = ''
     let lastAt = 0
-    const detector = new Ctor({ formats: ['qr_code', 'code_128', 'ean_13', 'code_39'] })
+    let detector: Detector
+    try {
+      detector = new Ctor({ formats: ['qr_code', 'code_128', 'ean_13', 'code_39'] })
+    } catch {
+      // Listed but unusable on some devices (no barcode service installed).
+      window.setTimeout(() => setError('This device cannot read barcodes with the camera. Type the code instead.'), 0)
+      return
+    }
 
     navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
       .then(async (s) => {
@@ -65,7 +75,9 @@ export function CameraScanner({ onCode, onClose }: { onCode: (code: string) => v
         }
         void tick()
       })
-      .catch(() => setError('The camera could not be opened. Allow camera access for this app and try again.'))
+      .catch((err: { name?: string }) => setError(err?.name === 'NotAllowedError'
+        ? 'Camera access is off for this app. Allow it in Android settings, or type the code instead.'
+        : 'The camera could not be opened. Type the code instead.'))
 
     return () => {
       stopped = true

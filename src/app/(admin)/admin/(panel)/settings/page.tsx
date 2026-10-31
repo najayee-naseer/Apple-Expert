@@ -8,6 +8,7 @@ import { StoreConfigCard } from '@/components/admin/settings/StoreConfigCard'
 import { StorefrontControlsCard } from '@/components/admin/settings/StorefrontControlsCard'
 import { FeaturedProductsCard } from '@/components/admin/settings/FeaturedProductsCard'
 import { BannersCard } from '@/components/admin/settings/BannersCard'
+import { InventoryPolicyCard } from '@/components/admin/settings/InventoryPolicyCard'
 import { useAdminAuth } from '@/context/AdminAuthContext'
 import { canEditCatalog } from '@/lib/admin/products'
 import { loadStoreSettings } from '@/lib/admin/storefront'
@@ -81,6 +82,7 @@ export default function AdminSettingsPage() {
         )}
         <FeaturedProductsCard canEdit={canEdit} />
         <BannersCard canEdit={canEdit} />
+        <InventoryPolicyCard canEdit={canEdit} />
       </div>
     </>
   )

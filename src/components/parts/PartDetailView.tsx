@@ -161,6 +161,8 @@ export function PartDetailView({ model, partKind }: PartDetailViewProps) {
         title={product.name}
         price={formatPrice(unitTotal * quantity)}
         onAddToCart={() => addToCart(product, undefined, quantity, warrantyOption)}
+        disabled={product.stock <= 0}
+        ctaLabel={product.stock <= 0 ? 'Out of Stock' : undefined}
       />
     </div>
   )

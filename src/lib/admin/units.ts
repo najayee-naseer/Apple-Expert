@@ -5,35 +5,44 @@ import { newRequestId } from './inventory'
 import type { AdminRole } from './roles'
 
 /**
- * GRN, barcode units and in-store POS — data access.
+ * Barcode units, the inventory dashboard and the shop counter — data access.
  *
- * Every write goes through a SECURITY DEFINER function from migration
- * 20261028120000 (admin_post_grn, pos_create_sale, admin_write_off_units,
- * admin_return_pos_unit). The tables themselves are read-only for every
- * browser session, and only staff can read them at all — customers never see
- * a barcode or an IMEI.
+ * Every write goes through a SECURITY DEFINER function. The tables are read-only
+ * for every browser session and only staff can read them at all; customers never
+ * see a barcode or an IMEI. Purchase cost columns are not granted to browser
+ * sessions at all (migration 20261101130000), so every select here names its
+ * columns: `*` would be refused. Owner/admin read money through loadCosts().
  *
  * How a unit moves:
  *   GRN          -> in_stock (one barcode per physical item)
- *   online order -> reserved (oldest unit first, FIFO) -> sold when shipped
+ *   online order -> reserved (oldest unit first, FIFO) -> sold on first shipment
+ *                   -> back to in_stock if the order is cancelled or expires first
  *   counter scan -> sold
+ *   customer return -> quarantined -> in_stock (verified) or written_off
  *   write-off    -> written_off
+ *   supplier return -> returned_to_supplier
  */
 
 type Tables = Database['public']['Tables']
-export type GrnRow = Tables['grns']['Row']
-export type GrnLineRow = Tables['grn_lines']['Row']
-export type UnitRow = Tables['inventory_units']['Row']
+
+const GRN_COLUMNS = 'id, grn_number, supplier_name, supplier_id, purchase_order_id, source_type, supplier_invoice, received_on, note, total_units, rejected_units, duplicate_invoice_note, created_by, request_id, created_at'
+const GRN_LINE_COLUMNS = 'id, grn_id, line_no, product_id, variant_id, product_name_snapshot, variant_label_snapshot, ordered_quantity, received_quantity, accepted_quantity, rejected_quantity, rejection_reason, purchase_order_line_id, corrected_quantity, returned_quantity, tracking_mode_snapshot'
+const UNIT_COLUMNS = 'id, barcode, serial_number, product_id, variant_id, grn_id, grn_line_id, received_on, fifo_seq, status, location_code, order_id, order_item_id, pos_sale_id, supplier_return_id, reentry_of_unit_id, status_changed_at, status_note, created_at'
+
+export type GrnRow = Omit<Tables['grns']['Row'], 'total_cost_cents' | 'corrected_cost_cents' | 'pending_cost_lines' | 'request_fingerprint'>
+export type GrnLineRow = Omit<Tables['grn_lines']['Row'], 'unit_cost_cents' | 'po_unit_cost_cents' | 'cost_pending' | 'cost_note'>
+export type UnitRow = Omit<Tables['inventory_units']['Row'], 'unit_cost_cents'>
 export type PosSaleRow = Tables['pos_sales']['Row']
 export type PosSaleItemRow = Tables['pos_sale_items']['Row']
 
-export const UNIT_STATUSES = ['in_stock', 'reserved', 'sold', 'written_off', 'returned_to_supplier'] as const
+export const UNIT_STATUSES = ['in_stock', 'reserved', 'sold', 'quarantined', 'written_off', 'returned_to_supplier'] as const
 export type UnitStatus = (typeof UNIT_STATUSES)[number]
 
 export const UNIT_STATUS_LABEL: Record<UnitStatus, string> = {
   in_stock: 'In stock',
   reserved: 'Reserved (online order)',
   sold: 'Sold',
+  quarantined: 'Quarantine',
   written_off: 'Written off',
   returned_to_supplier: 'Returned to supplier',
 }
@@ -93,8 +102,18 @@ export function splitCodes(text: string): string[] {
 export { newRequestId }
 
 // ---------------------------------------------------------------------------
-// Products for the GRN form
+// Products for GRN, PO and counter forms
 // ---------------------------------------------------------------------------
+
+export type TrackingMode = 'quantity' | 'unit'
+
+export interface ProductOptionVariant {
+  id: string
+  name: string
+  /** null = shares the product's stock. */
+  stock: number | null
+  trackingMode: TrackingMode
+}
 
 export interface GrnProductOption {
   id: string
@@ -102,9 +121,12 @@ export interface GrnProductOption {
   isActive: boolean
   categoryName: string | null
   requiresSerial: boolean
-  /** Units on the shelf right now (products.stock). */
+  /** The product's own number (or the pool its shared variants draw on). */
   stock: number
-  variants: { id: string; name: string; stock: number | null }[]
+  trackingMode: TrackingMode
+  /** What its category tracks by. 'unit' means these items must be individually tracked. */
+  categoryTrackingMode: TrackingMode
+  variants: ProductOptionVariant[]
 }
 
 interface ProductEmbedRow {
@@ -113,97 +135,79 @@ interface ProductEmbedRow {
   is_active: boolean
   stock: number
   sort_order: number
-  categories: { name: string; requires_serial: boolean } | null
-  product_variants: { id: string; name: string; stock: number | null; sort_order: number }[]
+  tracking_mode: string
+  categories: { name: string; requires_serial: boolean; default_tracking_mode: string } | null
+  product_variants: { id: string; name: string; stock: number | null; sort_order: number; tracking_mode: string | null }[]
 }
 
 export async function listProductsForGrn(): Promise<GrnProductOption[]> {
   const { data, error } = await getSupabaseClient()
     .from('products')
-    .select('id, name, is_active, stock, sort_order, categories(name, requires_serial), product_variants(id, name, stock, sort_order)')
+    .select('id, name, is_active, stock, sort_order, tracking_mode, categories(name, requires_serial, default_tracking_mode), product_variants(id, name, stock, sort_order, tracking_mode)')
     .order('name', { ascending: true })
     .limit(2000)
 
   if (error) throw error
-  return ((data ?? []) as unknown as ProductEmbedRow[]).map((p) => ({
-    id: p.id,
-    name: p.name,
-    isActive: p.is_active,
-    categoryName: p.categories?.name ?? null,
-    requiresSerial: p.categories?.requires_serial ?? false,
-    stock: p.stock,
-    variants: [...(p.product_variants ?? [])]
-      .sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name))
-      .map((v) => ({ id: v.id, name: v.name, stock: v.stock })),
-  }))
-}
-
-// ---------------------------------------------------------------------------
-// GRN
-// ---------------------------------------------------------------------------
-
-export interface GrnLineInput {
-  productId: string
-  variantId: string | null
-  quantity: number
-  unitCostCents: number
-  /** Empty, or exactly one per unit (blank entries allowed when optional). */
-  serials: string[]
-}
-
-export interface GrnInput {
-  supplierName: string
-  supplierInvoice: string
-  /** yyyy-mm-dd */
-  receivedOn: string
-  note: string
-  lines: GrnLineInput[]
-  requestId: string
-}
-
-export interface GrnResult {
-  id: string
-  grn_number: string
-  total_units: number
-  replayed: boolean
-}
-
-export async function postGrn(input: GrnInput): Promise<GrnResult> {
-  const { data, error } = await getSupabaseClient().rpc('admin_post_grn', {
-    p_supplier_name: input.supplierName,
-    p_supplier_invoice: input.supplierInvoice,
-    p_received_on: input.receivedOn,
-    p_note: input.note,
-    p_lines: input.lines.map((l) => ({
-      product_id: l.productId,
-      variant_id: l.variantId,
-      quantity: l.quantity,
-      unit_cost_cents: l.unitCostCents,
-      serials: l.serials,
-    })),
-    p_request_id: input.requestId,
+  return ((data ?? []) as unknown as ProductEmbedRow[]).map((p) => {
+    const trackingMode = p.tracking_mode === 'unit' ? 'unit' : 'quantity'
+    return {
+      id: p.id,
+      name: p.name,
+      isActive: p.is_active,
+      categoryName: p.categories?.name ?? null,
+      requiresSerial: p.categories?.requires_serial ?? false,
+      stock: p.stock,
+      trackingMode,
+      categoryTrackingMode: p.categories?.default_tracking_mode === 'unit' ? 'unit' : 'quantity',
+      variants: [...(p.product_variants ?? [])]
+        .sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name))
+        .map((v) => ({
+          id: v.id,
+          name: v.name,
+          stock: v.stock,
+          // Mirrors private.tracking_mode_of(): only an own-stock variant can differ.
+          trackingMode: v.stock !== null && (v.tracking_mode === 'unit' || v.tracking_mode === 'quantity') ? v.tracking_mode : trackingMode,
+        })),
+    }
   })
-  if (error) throw error
-  return data as unknown as GrnResult
 }
+
+/** The mode that applies to one product + variant. */
+export function trackingModeOf(product: GrnProductOption, variantId: string | null): TrackingMode {
+  return product.variants.find((v) => v.id === variantId)?.trackingMode ?? product.trackingMode
+}
+
+// ---------------------------------------------------------------------------
+// GRN (posting lives in purchasing.ts, with suppliers and purchase orders)
+// ---------------------------------------------------------------------------
 
 export interface GrnListItem extends GrnRow {
   createdByName: string | null
+  /** Barcoded units this GRN created. 0 = there are no barcode labels to print. */
+  unitCount: number
 }
 
 export async function listGrns(): Promise<GrnListItem[]> {
   const { data, error } = await getSupabaseClient()
     .from('grns')
-    .select('*, profiles(full_name, email)')
+    .select(`${GRN_COLUMNS}, profiles(full_name, email), grn_lines(accepted_quantity, tracking_mode_snapshot)`)
     .order('received_on', { ascending: false })
     .order('created_at', { ascending: false })
     .limit(200)
 
   if (error) throw error
-  return (data ?? []).map(({ profiles, ...row }) => ({
-    ...(row as GrnRow),
-    createdByName: profiles?.full_name ?? profiles?.email ?? null,
-  }))
+  return ((data ?? []) as unknown as (GrnRow & {
+    profiles: { full_name: string | null; email: string | null } | null
+    grn_lines: { accepted_quantity: number; tracking_mode_snapshot: string }[] | null
+  })[])
+    .map(({ profiles, grn_lines, ...row }) => ({
+      ...row,
+      createdByName: profiles?.full_name ?? profiles?.email ?? null,
+      // Every accepted item on a unit-tracked line got a unit. Not an embedded
+      // count: inventory_units is column-restricted, and PostgREST's count needs
+      // the whole table, so it would be refused.
+      unitCount: (grn_lines ?? []).reduce((n, l) => n + (l.tracking_mode_snapshot === 'unit' ? l.accepted_quantity : 0), 0),
+    }))
 }
 
 /** A unit with the names a label and a list need. */
@@ -214,7 +218,7 @@ export interface UnitView extends UnitRow {
   supplierName: string | null
 }
 
-const UNIT_SELECT = '*, products(name), product_variants(name), grns(grn_number, supplier_name)'
+const UNIT_SELECT = `${UNIT_COLUMNS}, products(name), product_variants(name), grns(grn_number, supplier_name)`
 
 interface UnitEmbedRow extends UnitRow {
   products: { name: string } | null
@@ -242,18 +246,47 @@ export interface GrnDetail {
 export async function loadGrn(grnId: string): Promise<GrnDetail> {
   const supabase = getSupabaseClient()
   const [grn, lines, units] = await Promise.all([
-    supabase.from('grns').select('*').eq('id', grnId).single(),
-    supabase.from('grn_lines').select('*').eq('grn_id', grnId).order('line_no'),
+    supabase.from('grns').select(GRN_COLUMNS).eq('id', grnId).single(),
+    supabase.from('grn_lines').select(GRN_LINE_COLUMNS).eq('grn_id', grnId).order('line_no'),
     supabase.from('inventory_units').select(UNIT_SELECT).eq('grn_id', grnId).order('fifo_seq').limit(2000),
   ])
   if (grn.error) throw grn.error
   if (lines.error) throw lines.error
   if (units.error) throw units.error
   return {
-    grn: grn.data,
-    lines: lines.data ?? [],
+    grn: grn.data as unknown as GrnRow,
+    lines: (lines.data ?? []) as unknown as GrnLineRow[],
     units: ((units.data ?? []) as unknown as UnitEmbedRow[]).map(toUnitView),
   }
+}
+
+// ---------------------------------------------------------------------------
+// Purchase money: owner/admin only, enforced by the database
+// ---------------------------------------------------------------------------
+
+export type CostKind = 'grn' | 'grn_line' | 'po' | 'po_line' | 'supplier_return' | 'supplier_return_item' | 'unit'
+
+export interface CostRow {
+  id: string
+  parentId: string | null
+  /** null while the cost is pending. Never treated as zero. */
+  cents: number | null
+  pending: boolean
+  extra: Record<string, unknown> | null
+}
+
+/** Staff calling this are refused by the database, so screens ask only for owner/admin. */
+export async function loadCosts(kind: CostKind, ids: string[]): Promise<Map<string, CostRow>> {
+  if (ids.length === 0) return new Map()
+  const { data, error } = await getSupabaseClient().rpc('admin_purchase_costs', { p_kind: kind, p_ids: ids })
+  if (error) throw error
+  return new Map((data ?? []).map((r) => [r.id, {
+    id: r.id,
+    parentId: r.parent_id,
+    cents: r.cents === null ? null : Number(r.cents),
+    pending: r.pending,
+    extra: (r.extra ?? null) as Record<string, unknown> | null,
+  }]))
 }
 
 // ---------------------------------------------------------------------------
@@ -287,37 +320,62 @@ export async function listUnits(filter: UnitFilter): Promise<UnitView[]> {
   return ((data ?? []) as unknown as UnitEmbedRow[]).map(toUnitView)
 }
 
-export interface UnitSummaryRow {
+// ---------------------------------------------------------------------------
+// Dashboard: every figure comes from admin_inventory_dashboard()
+// ---------------------------------------------------------------------------
+
+export interface DashboardRow {
   productId: string
   variantId: string | null
   productName: string
   variantName: string | null
-  inStock: number
+  categoryName: string | null
+  isActive: boolean
+  trackingMode: TrackingMode
+  /** product: no variants. shared: draws on the product's pool. own: its own number. */
+  stockScope: 'product' | 'shared' | 'own'
+  onHand: number
   reserved: number
+  available: number
   sold: number
+  quarantined: number
+  returnedToSupplier: number
   writtenOff: number
+  serialisedUnits: number
   oldestReceivedOn: string | null
+  stockStatus: 'out' | 'low' | 'in'
 }
 
-export async function loadUnitSummary(products: GrnProductOption[]): Promise<UnitSummaryRow[]> {
-  const { data, error } = await getSupabaseClient().rpc('admin_unit_stock_summary')
+export async function loadInventoryDashboard(): Promise<DashboardRow[]> {
+  const { data, error } = await getSupabaseClient().rpc('admin_inventory_dashboard')
   if (error) throw error
+  return (data ?? []).map((r) => ({
+    productId: r.product_id,
+    variantId: r.variant_id,
+    productName: r.product_name,
+    variantName: r.variant_name,
+    categoryName: r.category_name,
+    isActive: r.is_active,
+    trackingMode: r.tracking_mode === 'unit' ? 'unit' : 'quantity',
+    stockScope: r.stock_scope as DashboardRow['stockScope'],
+    onHand: r.on_hand,
+    reserved: r.reserved,
+    available: r.available,
+    sold: r.sold,
+    quarantined: r.quarantined,
+    returnedToSupplier: r.returned_to_supplier,
+    writtenOff: r.written_off,
+    serialisedUnits: r.serialised_units,
+    oldestReceivedOn: r.oldest_received_on,
+    stockStatus: r.stock_status as DashboardRow['stockStatus'],
+  }))
+}
 
-  const byId = new Map(products.map((p) => [p.id, p]))
-  return (data ?? []).map((r) => {
-    const product = byId.get(r.product_id)
-    return {
-      productId: r.product_id,
-      variantId: r.variant_id ?? null,
-      productName: product?.name ?? r.product_id,
-      variantName: product?.variants.find((v) => v.id === r.variant_id)?.name ?? null,
-      inStock: Number(r.in_stock),
-      reserved: Number(r.reserved),
-      sold: Number(r.sold),
-      writtenOff: Number(r.written_off),
-      oldestReceivedOn: r.oldest_received_on ?? null,
-    }
-  }).sort((a, b) => a.productName.localeCompare(b.productName) || (a.variantName ?? '').localeCompare(b.variantName ?? ''))
+/** Releases overdue online holds. Safe to call repeatedly. */
+export async function expirePendingOrders(): Promise<number> {
+  const { data, error } = await getSupabaseClient().rpc('expire_pending_orders', {})
+  if (error) throw error
+  return (data as unknown as { expired: number }).expired
 }
 
 export async function writeOffUnits(unitIds: string[], reason: 'damage' | 'correction', note: string): Promise<number> {
@@ -330,9 +388,16 @@ export async function writeOffUnits(unitIds: string[], reason: 'damage' | 'corre
   return (data as unknown as { written_off: number }).written_off
 }
 
-export async function returnPosUnit(unitId: string, note: string): Promise<void> {
-  const { error } = await getSupabaseClient().rpc('admin_return_pos_unit', { p_unit_id: unitId, p_note: note })
+export async function quarantineUnits(unitIds: string[], note: string): Promise<number> {
+  const { data, error } = await getSupabaseClient().rpc('admin_quarantine_units', { p_unit_ids: unitIds, p_note: note })
   if (error) throw error
+  return (data as unknown as { quarantined: number }).quarantined
+}
+
+export async function releaseQuarantineUnits(unitIds: string[], note: string): Promise<number> {
+  const { data, error } = await getSupabaseClient().rpc('admin_release_quarantine_units', { p_unit_ids: unitIds, p_note: note })
+  if (error) throw error
+  return (data as unknown as { released: number }).released
 }
 
 /** Units an online order holds — what staff pick and pack. */
@@ -352,6 +417,7 @@ export async function listOrderUnits(orderId: string): Promise<UnitView[]> {
 // ---------------------------------------------------------------------------
 
 export interface ScannedUnit {
+  kind: 'unit'
   unit_id: string
   barcode: string
   serial_number: string | null
@@ -360,22 +426,69 @@ export interface ScannedUnit {
   variant_id: string | null
   product_name: string
   variant_name: string | null
-  /** Live retail price; null when the item has none (it cannot be sold). */
+  /** Live price at the served customer's tier; null when there is none (it cannot be sold). */
   price_cents: number | null
+  tier_code: string | null
 }
 
-export async function lookupUnit(code: string): Promise<ScannedUnit> {
-  const { data, error } = await getSupabaseClient().rpc('pos_lookup_unit', { p_code: code })
+export interface QuotedProduct {
+  kind: 'product'
+  product_id: string
+  variant_id: string | null
+  product_name: string
+  variant_name: string | null
+  tracking_mode: TrackingMode
+  available: number
+  price_cents: number | null
+  tier_code: string | null
+}
+
+export async function lookupUnit(code: string, customerProfileId: string | null): Promise<ScannedUnit> {
+  const { data, error } = await getSupabaseClient().rpc('pos_lookup_unit', {
+    p_code: code,
+    p_customer_profile_id: customerProfileId,
+  })
   if (error) throw error
   return data as unknown as ScannedUnit
 }
 
+export async function quoteProduct(productId: string, variantId: string | null, customerProfileId: string | null): Promise<QuotedProduct> {
+  const { data, error } = await getSupabaseClient().rpc('pos_quote_product', {
+    p_product_id: productId,
+    p_variant_id: variantId,
+    p_customer_profile_id: customerProfileId,
+  })
+  if (error) throw error
+  return data as unknown as QuotedProduct
+}
+
+export interface CounterCustomer {
+  profileId: string
+  fullName: string | null
+  phone: string | null
+  tierCode: string
+}
+
+export async function findCounterCustomer(phone: string): Promise<CounterCustomer[]> {
+  const { data, error } = await getSupabaseClient().rpc('pos_find_customer', { p_phone: phone })
+  if (error) throw error
+  return (data ?? []).map((c) => ({ profileId: c.profile_id, fullName: c.full_name, phone: c.phone, tierCode: c.tier_code }))
+}
+
+/** One bill line as sent to the database: never a price. */
+export type PosItemInput =
+  | { code: string }
+  | { product_id: string; variant_id: string | null; quantity: number }
+
 export interface PosSaleInput {
-  codes: string[]
+  items: PosItemInput[]
   paymentMethod: PaymentMethod
+  paymentReference: string
   discountCents: number
   customerName: string
   customerPhone: string
+  customerProfileId: string | null
+  discountApprovalId: string | null
   note: string
   requestId: string
 }
@@ -389,16 +502,136 @@ export interface PosSaleResult {
 
 export async function createPosSale(input: PosSaleInput): Promise<PosSaleResult> {
   const { data, error } = await getSupabaseClient().rpc('pos_create_sale', {
-    p_codes: input.codes,
+    p_items: input.items,
     p_payment_method: input.paymentMethod,
+    p_payment_reference: input.paymentReference,
     p_discount_cents: input.discountCents,
     p_customer_name: input.customerName,
     p_customer_phone: input.customerPhone,
+    p_customer_profile_id: input.customerProfileId,
     p_note: input.note,
+    p_discount_approval_id: input.discountApprovalId,
     p_request_id: input.requestId,
   })
   if (error) throw error
   return data as unknown as PosSaleResult
+}
+
+// Discount policy and approval
+
+export interface InventoryPolicy {
+  maxReservedUnitsPerCustomer: number | null
+  maxActiveOrdersPerCustomer: number | null
+  staffMaxDiscountBps: number
+}
+
+export async function loadInventoryPolicy(): Promise<InventoryPolicy> {
+  const { data, error } = await getSupabaseClient()
+    .from('inventory_policy')
+    .select('max_reserved_units_per_customer, max_active_orders_per_customer, staff_max_discount_bps')
+    .eq('id', true)
+    .single()
+  if (error) throw error
+  return {
+    maxReservedUnitsPerCustomer: data.max_reserved_units_per_customer,
+    maxActiveOrdersPerCustomer: data.max_active_orders_per_customer,
+    staffMaxDiscountBps: data.staff_max_discount_bps,
+  }
+}
+
+export async function saveInventoryPolicy(policy: InventoryPolicy, note: string): Promise<void> {
+  const { error } = await getSupabaseClient().rpc('admin_save_inventory_policy', {
+    p_max_reserved_units_per_customer: policy.maxReservedUnitsPerCustomer,
+    p_max_active_orders_per_customer: policy.maxActiveOrdersPerCustomer,
+    p_staff_max_discount_bps: policy.staffMaxDiscountBps,
+    p_note: note,
+  })
+  if (error) throw error
+}
+
+export interface DiscountApproval {
+  id: string
+  status: 'pending' | 'approved' | 'rejected' | 'used'
+  requestedCents: number
+  subtotalCents: number
+  reason: string
+  requestedByName: string | null
+  decisionNote: string | null
+  expiresAt: string
+  createdAt: string
+}
+
+const APPROVAL_SELECT = 'id, status, requested_cents, subtotal_cents, reason, decision_note, expires_at, created_at, profiles!pos_discount_approvals_requested_by_fkey(full_name, email)'
+
+interface ApprovalEmbedRow {
+  id: string
+  status: string
+  requested_cents: number
+  subtotal_cents: number
+  reason: string
+  decision_note: string | null
+  expires_at: string
+  created_at: string
+  profiles: { full_name: string | null; email: string | null } | null
+}
+
+function toApproval(r: ApprovalEmbedRow): DiscountApproval {
+  return {
+    id: r.id,
+    status: r.status as DiscountApproval['status'],
+    requestedCents: r.requested_cents,
+    subtotalCents: r.subtotal_cents,
+    reason: r.reason,
+    requestedByName: r.profiles?.full_name ?? r.profiles?.email ?? null,
+    decisionNote: r.decision_note,
+    expiresAt: r.expires_at,
+    createdAt: r.created_at,
+  }
+}
+
+export async function requestDiscountApproval(input: {
+  saleRequestId: string
+  items: PosItemInput[]
+  customerProfileId: string | null
+  discountCents: number
+  reason: string
+}): Promise<string> {
+  const { data, error } = await getSupabaseClient().rpc('pos_request_discount_approval', {
+    p_sale_request_id: input.saleRequestId,
+    p_items: input.items,
+    p_customer_profile_id: input.customerProfileId,
+    p_discount_cents: input.discountCents,
+    p_reason: input.reason,
+  })
+  if (error) throw error
+  return (data as unknown as { id: string }).id
+}
+
+export async function loadDiscountApproval(id: string): Promise<DiscountApproval> {
+  const { data, error } = await getSupabaseClient()
+    .from('pos_discount_approvals').select(APPROVAL_SELECT).eq('id', id).single()
+  if (error) throw error
+  return toApproval(data as unknown as ApprovalEmbedRow)
+}
+
+/** What is waiting for an owner/admin. RLS gives staff only their own. */
+export async function listPendingDiscountApprovals(): Promise<DiscountApproval[]> {
+  const { data, error } = await getSupabaseClient()
+    .from('pos_discount_approvals')
+    .select(APPROVAL_SELECT)
+    .eq('status', 'pending')
+    .gt('expires_at', new Date().toISOString())
+    .order('created_at', { ascending: false })
+    .limit(50)
+  if (error) throw error
+  return ((data ?? []) as unknown as ApprovalEmbedRow[]).map(toApproval)
+}
+
+export async function decideDiscountApproval(id: string, approve: boolean, note: string): Promise<void> {
+  const { error } = await getSupabaseClient().rpc('admin_decide_discount_approval', {
+    p_approval_id: id, p_approve: approve, p_note: note,
+  })
+  if (error) throw error
 }
 
 export interface PosSaleListItem extends PosSaleRow {
@@ -409,14 +642,17 @@ export interface PosSaleListItem extends PosSaleRow {
 export async function listPosSales(): Promise<PosSaleListItem[]> {
   const { data, error } = await getSupabaseClient()
     .from('pos_sales')
-    .select('*, profiles(full_name, email), pos_sale_items(count)')
+    .select('*, profiles!pos_sales_cashier_id_fkey(full_name, email), pos_sale_items(count)')
     .order('created_at', { ascending: false })
     .limit(200)
   if (error) throw error
-  return (data ?? []).map(({ profiles, pos_sale_items, ...row }) => ({
-    ...(row as PosSaleRow),
+  return ((data ?? []) as unknown as (PosSaleRow & {
+    profiles: { full_name: string | null; email: string | null } | null
+    pos_sale_items: { count: number }[] | null
+  })[]).map(({ profiles, pos_sale_items, ...row }) => ({
+    ...row,
     cashierName: profiles?.full_name ?? profiles?.email ?? null,
-    itemCount: (pos_sale_items as unknown as { count: number }[] | null)?.[0]?.count ?? 0,
+    itemCount: pos_sale_items?.[0]?.count ?? 0,
   }))
 }
 
@@ -424,21 +660,25 @@ export interface PosSaleDetail {
   sale: PosSaleRow
   items: PosSaleItemRow[]
   cashierName: string | null
+  refundedCents: number
 }
 
 export async function loadPosSale(saleId: string): Promise<PosSaleDetail> {
   const supabase = getSupabaseClient()
-  const [sale, items] = await Promise.all([
-    supabase.from('pos_sales').select('*, profiles(full_name, email)').eq('id', saleId).single(),
-    supabase.from('pos_sale_items').select('*').eq('pos_sale_id', saleId).order('barcode_snapshot'),
+  const [sale, items, refunds] = await Promise.all([
+    supabase.from('pos_sales').select('*, profiles!pos_sales_cashier_id_fkey(full_name, email)').eq('id', saleId).single(),
+    supabase.from('pos_sale_items').select('*').eq('pos_sale_id', saleId).order('product_name_snapshot'),
+    supabase.from('customer_refunds').select('amount_cents').eq('pos_sale_id', saleId),
   ])
   if (sale.error) throw sale.error
   if (items.error) throw items.error
-  const { profiles, ...row } = sale.data
+  if (refunds.error) throw refunds.error
+  const { profiles, ...row } = sale.data as unknown as PosSaleRow & { profiles: { full_name: string | null; email: string | null } | null }
   return {
-    sale: row as PosSaleRow,
+    sale: row,
     items: items.data ?? [],
     cashierName: profiles?.full_name ?? profiles?.email ?? null,
+    refundedCents: (refunds.data ?? []).reduce((sum, r) => sum + Number(r.amount_cents), 0),
   }
 }
 
@@ -447,45 +687,21 @@ export async function loadPosSale(saleId: string): Promise<PosSaleDetail> {
 // ---------------------------------------------------------------------------
 
 /**
- * A sentence the shop can act on. The database raises '<code>: <detail>';
- * the detail already names the item, barcode or IMEI concerned.
+ * A sentence the shop can act on. The database raises '<code>: <detail>'; the
+ * detail already names the item, barcode or IMEI concerned, so it is what a person
+ * reads. Anything not in that shape falls back to the full PostgREST detail.
  */
 export function describeUnitError(err: unknown, fallback: string): string {
   const message = typeof (err as { message?: unknown })?.message === 'string' ? (err as { message: string }).message : ''
-  const code = message.split(':')[0]?.trim()
-  const detail = message.slice(message.indexOf(':') + 1).trim()
-  switch (code) {
-    case 'not_authenticated':
-    case 'insufficient_privilege': return 'Your role cannot do this. GRNs and write-offs need an owner or admin.'
-    case 'serial_required':
-    case 'invalid_serial':
-    case 'invalid_imei':
-    case 'invalid_serials':
-    case 'duplicate_serial':
-    case 'untracked_stock':
-    case 'variant_required':
-    case 'invalid_date':
-    case 'invalid_supplier':
-    case 'invalid_invoice':
-    case 'invalid_variant':
-    case 'unknown_product':
-    case 'variant_product_mismatch':
-    case 'invalid_quantity':
-    case 'invalid_cost':
-    case 'invalid_lines':
-    case 'unit_not_found':
-    case 'unit_not_available':
-    case 'unit_not_returnable':
-    case 'duplicate_item':
-    case 'invalid_discount':
-    case 'invalid_note':
-    case 'invalid_customer':
-    case 'insufficient_stock':
-    case 'price_unavailable': return capitalise(detail)
-    default:
-      if (isFunctionMissing(err)) return 'This feature becomes available after the next server update. Nothing was changed.'
-      return describeAdminError(err, fallback)
+  const match = message.match(/^([a-z_]+):\s*([\s\S]+)$/)
+  if (match) {
+    if (match[1] === 'not_authenticated' || match[1] === 'insufficient_privilege') {
+      return 'Your role cannot do this. It needs an owner or admin.'
+    }
+    return capitalise(match[2])
   }
+  if (isFunctionMissing(err)) return 'This feature becomes available after the next server update. Nothing was changed.'
+  return describeAdminError(err, fallback)
 }
 
 function capitalise(text: string): string {

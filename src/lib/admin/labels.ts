@@ -104,8 +104,53 @@ async function drawLabel(doc: PdfDoc, item: LabelItem, x: number, y: number) {
   doc.text(item.barcode, x + LABEL_W / 2, barTop + 10, { align: 'center' })
 }
 
-/** Builds the label PDF and returns it as a Blob. */
+/**
+ * A label for a quantity-tracked item, which has no barcode in the database. It
+ * deliberately carries no code of any kind: nothing could resolve it at the counter.
+ */
+export interface ShelfLabelItem {
+  title: string
+  subtitle: string | null
+  reference: string
+}
+
+function drawShelfLabel(doc: PdfDoc, item: ShelfLabelItem, x: number, y: number) {
+  const pad = 3
+  const width = LABEL_W - pad * 2
+  doc.setTextColor(0, 0, 0)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(10)
+  const titleLines = (doc.splitTextToSize(item.title, width) as string[]).slice(0, 2)
+  doc.text(titleLines, x + pad, y + pad + 3.5)
+  let cursor = y + pad + 3.5 + titleLines.length * 4.2
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(8)
+  if (item.subtitle) {
+    doc.text(fit(doc, item.subtitle, width), x + pad, cursor)
+    cursor += 3.6
+  }
+  doc.setFontSize(6.5)
+  doc.text(fit(doc, item.reference, width), x + pad, y + LABEL_H - pad - 2.8)
+  doc.setFontSize(5.5)
+  doc.text('Apple Expert', x + pad, y + LABEL_H - pad)
+}
+
+/** Builds the shelf label PDF and returns it as a Blob. */
+export async function buildShelfLabelPdf(items: ShelfLabelItem[], layout: LabelLayout): Promise<Blob> {
+  return renderLabels(items, layout, drawShelfLabel)
+}
+
+/** Builds the barcode label PDF and returns it as a Blob. */
 export async function buildLabelPdf(items: LabelItem[], layout: LabelLayout): Promise<Blob> {
+  return renderLabels(items, layout, drawLabel)
+}
+
+/** Places one label per sticker page, or 24 per A4 sheet with light cut marks. */
+async function renderLabels<T>(
+  items: T[],
+  layout: LabelLayout,
+  draw: (doc: PdfDoc, item: T, x: number, y: number) => void | Promise<void>,
+): Promise<Blob> {
   if (items.length === 0) throw new Error('There are no labels to print.')
   const { jsPDF } = await import('jspdf')
 
@@ -113,7 +158,7 @@ export async function buildLabelPdf(items: LabelItem[], layout: LabelLayout): Pr
     const doc = new jsPDF({ unit: 'mm', format: [LABEL_W, LABEL_H], orientation: 'landscape' })
     for (let i = 0; i < items.length; i++) {
       if (i > 0) doc.addPage([LABEL_W, LABEL_H], 'landscape')
-      await drawLabel(doc, items[i], 0, 0)
+      await draw(doc, items[i], 0, 0)
     }
     return doc.output('blob')
   }
@@ -136,16 +181,44 @@ export async function buildLabelPdf(items: LabelItem[], layout: LabelLayout): Pr
     doc.setDrawColor(200, 200, 200)
     doc.setLineWidth(0.1)
     doc.rect(x, y, LABEL_W, LABEL_H)
-    await drawLabel(doc, items[i], x, y)
+    await draw(doc, items[i], x, y)
   }
   return doc.output('blob')
 }
 
 /**
- * Opens a generated PDF so it can be printed. Falls back to a download when
- * the browser blocks the new tab (pop-up blockers, some in-app webviews).
+ * Hands a generated PDF to something that can print it.
+ *
+ * In the APK neither browser route works: Capacitor's WebView has no multi-window
+ * support and no download listener, so window.open() just navigates the app away
+ * to a blob it cannot render, and an <a download> does nothing. There the file is
+ * written to the app's cache and offered through the system share sheet, from
+ * which a PDF viewer, a print service or a label printer's app can take it. Plugins
+ * load only on the device, so the web bundle does not carry them.
+ *
+ * Throws if the native route fails, so the screen can say so.
  */
-export function openPdf(blob: Blob, fileName: string) {
+export async function openPdf(blob: Blob, fileName: string): Promise<void> {
+  const { Capacitor } = await import('@capacitor/core')
+  if (Capacitor.isNativePlatform()) {
+    const [{ Filesystem, Directory }, { Share }] = await Promise.all([
+      import('@capacitor/filesystem'),
+      import('@capacitor/share'),
+    ])
+    const { uri } = await Filesystem.writeFile({
+      path: fileName.replace(/[^A-Za-z0-9._-]/g, '_'),
+      data: await blobToBase64(blob),
+      directory: Directory.Cache,
+    })
+    try {
+      await Share.share({ title: fileName, files: [uri], dialogTitle: 'Print or save' })
+    } catch (err) {
+      // Closing the share sheet without choosing anything is not a failure.
+      if (!(err instanceof Error && /cancel/i.test(err.message))) throw err
+    }
+    return
+  }
+
   const url = URL.createObjectURL(blob)
   const tab = window.open(url, '_blank')
   if (!tab) {
@@ -158,4 +231,13 @@ export function openPdf(blob: Blob, fileName: string) {
   }
   // Give the viewer time to load before the URL is released.
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(reader.error ?? new Error('The PDF could not be read.'))
+    reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '')
+    reader.readAsDataURL(blob)
+  })
 }

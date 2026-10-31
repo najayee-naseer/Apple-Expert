@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils'
 import { useTheme } from '@/context/ThemeContext'
 import { useAdminAuth } from '@/context/AdminAuthContext'
 import { ROLE_LABEL } from '@/lib/admin/roles'
-import { ADMIN_NAV, isAdminNavActive, isNavGroup, type AdminNavGroup } from './adminNav'
+import { navForRole, isAdminNavActive, isNavGroup, type AdminNavGroup } from './adminNav'
 
 function NavGroup({ group, pathname, onNavigate }: {
   group: AdminNavGroup
@@ -63,10 +63,11 @@ function NavGroup({ group, pathname, onNavigate }: {
 
 function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname() ?? ''
+  const { role } = useAdminAuth()
 
   return (
     <nav className="flex flex-col gap-1" aria-label="Admin sections">
-      {ADMIN_NAV.map((entry) => {
+      {navForRole(role === 'owner' || role === 'admin').map((entry) => {
         if (isNavGroup(entry)) {
           return <NavGroup key={entry.group} group={entry} pathname={pathname} onNavigate={onNavigate} />
         }

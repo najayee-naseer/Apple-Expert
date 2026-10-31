@@ -5,12 +5,12 @@ import { Eye, PackagePlus, Plus, Trash2, LoaderCircle, Ban } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import { AdminDrawer } from '@/components/admin/settings/AdminDrawer'
-import { TextAreaField, FieldLabel } from '@/components/admin/products/fields'
+import { TextAreaField, FieldLabel, CheckboxField } from '@/components/admin/products/fields'
 import { ListHeader, ListTable, RowAction, StatusPill, type Column } from '@/components/admin/purchasing/ListTable'
-import { ErrorNote, SuccessNote, parseRupees, SELECT_CLASS } from '@/components/admin/inventory/shared'
+import { ErrorNote, SuccessNote, parseCost, SELECT_CLASS } from '@/components/admin/inventory/shared'
 import { GrnCreator } from '@/components/admin/inventory/GrnCreator'
 import { useAdminAuth } from '@/context/AdminAuthContext'
-import { listProductsForGrn, todayInColombo, formatDate, type GrnProductOption } from '@/lib/admin/units'
+import { listProductsForGrn, todayInColombo, formatDate, loadCosts, type CostRow, type GrnProductOption } from '@/lib/admin/units'
 import {
   listPurchaseOrders, loadPurchaseOrder, createPurchaseOrder, closePurchaseOrder, listSuppliers,
   canManagePurchasing, describePurchasingError, formatRupeesFromCents, isPoReceivable, newRequestId,
@@ -37,6 +37,7 @@ export default function PurchaseOrdersPage() {
   const [rows, setRows] = useState<PurchaseOrderListItem[] | null>(null)
   const [suppliers, setSuppliers] = useState<SupplierRow[]>([])
   const [products, setProducts] = useState<GrnProductOption[]>([])
+  const [costs, setCosts] = useState<Map<string, CostRow>>(new Map())
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState<string>('all')
@@ -45,16 +46,21 @@ export default function PurchaseOrdersPage() {
   const [receiving, setReceiving] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
-  const load = useCallback(() => Promise.all([listPurchaseOrders(), listSuppliers(), listProductsForGrn()]), [])
+  const load = useCallback(async () => {
+    const [o, s, p] = await Promise.all([listPurchaseOrders(), listSuppliers(), listProductsForGrn()])
+    // Purchase values come separately: staff are refused them by the database.
+    const c = canManage ? await loadCosts('po', o.map((x) => x.id)) : new Map<string, CostRow>()
+    return [o, s, p, c] as const
+  }, [canManage])
   const refresh = useCallback(() => {
-    load().then(([o, s, p]) => { setRows(o); setSuppliers(s); setProducts(p); setError(null) })
+    load().then(([o, s, p, c]) => { setRows(o); setSuppliers(s); setProducts(p); setCosts(c); setError(null) })
       .catch((err) => setError(describePurchasingError(err, 'Could not load purchase orders.')))
   }, [load])
 
   useEffect(() => {
     let cancelled = false
     load()
-      .then(([o, s, p]) => { if (!cancelled) { setRows(o); setSuppliers(s); setProducts(p) } })
+      .then(([o, s, p, c]) => { if (!cancelled) { setRows(o); setSuppliers(s); setProducts(p); setCosts(c) } })
       .catch((err) => { if (!cancelled) setError(describePurchasingError(err, 'Could not load purchase orders.')) })
     return () => { cancelled = true }
   }, [load])
@@ -73,7 +79,15 @@ export default function PurchaseOrdersPage() {
     { key: 'date', header: 'Order date', render: (o) => <span className="whitespace-nowrap">{formatDate(o.order_date)}</span> },
     { key: 'expected', header: 'Expected', render: (o) => <span className="whitespace-nowrap text-muted-foreground">{o.expected_date ? formatDate(o.expected_date) : '—'}</span> },
     { key: 'status', header: 'Status', render: (o) => <PoStatusPill status={o.status} /> },
-    { key: 'total', header: 'Total', align: 'right', render: (o) => <span className="tabular-nums whitespace-nowrap">{formatRupeesFromCents(o.total_cents)}</span> },
+    ...(canManage ? [{
+      key: 'total', header: 'Total', align: 'right' as const,
+      render: (o: PurchaseOrderListItem) => (
+        <span className="tabular-nums whitespace-nowrap">
+          {formatRupeesFromCents(costs.get(o.id)?.cents ?? 0)}
+          {costs.get(o.id)?.pending && <span className="block text-[11px] font-semibold text-amber-600 dark:text-amber-400">cost pending</span>}
+        </span>
+      ),
+    }] : []),
     { key: 'actions', header: 'Actions', align: 'right', render: (o) => (
       <span className="inline-flex gap-0.5">
         <RowAction label="View" onClick={() => setViewing(o.id)}><Eye size={16} /></RowAction>
@@ -124,8 +138,14 @@ export default function PurchaseOrdersPage() {
   )
 }
 
-interface LineDraft { key: string; productId: string; variantId: string; quantity: string; cost: string }
-const emptyLine = (): LineDraft => ({ key: newRequestId(), productId: '', variantId: '', quantity: '1', cost: '' })
+interface LineDraft { key: string; productId: string; variantId: string; quantity: string; cost: string; costPending: boolean }
+const emptyLine = (): LineDraft => ({ key: newRequestId(), productId: '', variantId: '', quantity: '1', cost: '', costPending: false })
+
+/** cents, or null when pending or not valid. */
+function lineCost(l: LineDraft): number | null {
+  const c = parseCost(l.cost)
+  return l.costPending || c === 'blank' ? null : c
+}
 
 function PoCreator({ suppliers, products, onClose, onCreated }: {
   suppliers: SupplierRow[]
@@ -144,7 +164,7 @@ function PoCreator({ suppliers, products, onClose, onCreated }: {
 
   const byId = useMemo(() => new Map(products.map((p) => [p.id, p])), [products])
   const active = suppliers.filter((s) => s.is_active)
-  const total = lines.reduce((sum, l) => sum + (Number(l.quantity) || 0) * (parseRupees(l.cost) ?? 0), 0)
+  const total = lines.reduce((sum, l) => sum + (Number(l.quantity) || 0) * (lineCost(l) ?? 0), 0)
 
   function update(key: string, patch: Partial<LineDraft>) {
     setLines((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)))
@@ -158,14 +178,18 @@ function PoCreator({ suppliers, products, onClose, onCreated }: {
       if (!p) { setError(`Line ${i + 1}: choose a product.`); return }
       if (p.variants.length > 0 && !l.variantId) { setError(`Line ${i + 1}: choose the variant.`); return }
       if (!/^\d+$/.test(l.quantity) || Number(l.quantity) < 1 || Number(l.quantity) > 2000) { setError(`Line ${i + 1}: quantity must be 1 to 2000.`); return }
-      if (parseRupees(l.cost) === null) { setError(`Line ${i + 1}: cost must be an amount in rupees.`); return }
+      if (!l.costPending) {
+        const c = parseCost(l.cost)
+        if (c === 'blank') { setError(`Line ${i + 1}: enter the cost, or tick cost pending. Blank is never treated as free.`); return }
+        if (c === null) { setError(`Line ${i + 1}: cost must be an amount in rupees.`); return }
+      }
     }
     setBusy(true)
     setError(null)
     try {
       const r = await createPurchaseOrder({
         supplierId, orderDate, expectedDate: expected || null, note: note.trim(), requestId,
-        lines: lines.map((l) => ({ productId: l.productId, variantId: l.variantId || null, quantity: Number(l.quantity), unitCostCents: parseRupees(l.cost) as number })),
+        lines: lines.map((l) => ({ productId: l.productId, variantId: l.variantId || null, quantity: Number(l.quantity), unitCostCents: lineCost(l) })),
       })
       onCreated(r.po_number)
     } catch (err) {
@@ -232,9 +256,11 @@ function PoCreator({ suppliers, products, onClose, onCreated }: {
                 <input type="number" inputMode="numeric" min={1} className={cn(CONTROL, 'tabular-nums')} value={l.quantity} disabled={busy}
                   onChange={(e) => update(l.key, { quantity: e.target.value })} /></label>
               <label className="block"><FieldLabel hint="Rs., per unit">Cost price</FieldLabel>
-                <input inputMode="decimal" className={cn(CONTROL, 'tabular-nums')} placeholder="0" value={l.cost} disabled={busy}
+                <input inputMode="decimal" className={cn(CONTROL, 'tabular-nums')} value={l.cost} disabled={busy || l.costPending}
                   onChange={(e) => update(l.key, { cost: e.target.value })} /></label>
             </div>
+            <CheckboxField id={`po-pending-${l.key}`} label="Cost pending (not known yet)" checked={l.costPending} disabled={busy}
+              onChange={(v) => update(l.key, { costPending: v, cost: v ? '' : l.cost })} />
           </section>
         )
       })}
@@ -255,6 +281,8 @@ function PoView({ poId, canManage, onClose, onReceive, onChanged }: {
   onChanged: (message: string) => void
 }) {
   const [detail, setDetail] = useState<PurchaseOrderDetail | null>(null)
+  const [poCost, setPoCost] = useState<CostRow | null>(null)
+  const [lineCosts, setLineCosts] = useState<Map<string, CostRow>>(new Map())
   const [error, setError] = useState<string | null>(null)
   const [closing, setClosing] = useState(false)
   const [closeNote, setCloseNote] = useState('')
@@ -262,11 +290,15 @@ function PoView({ poId, canManage, onClose, onReceive, onChanged }: {
 
   useEffect(() => {
     let cancelled = false
-    loadPurchaseOrder(poId)
-      .then((d) => { if (!cancelled) setDetail(d) })
+    Promise.all([
+      loadPurchaseOrder(poId),
+      canManage ? loadCosts('po', [poId]) : Promise.resolve(new Map<string, CostRow>()),
+      canManage ? loadCosts('po_line', [poId]) : Promise.resolve(new Map<string, CostRow>()),
+    ])
+      .then(([d, c, l]) => { if (!cancelled) { setDetail(d); setPoCost(c.get(poId) ?? null); setLineCosts(l) } })
       .catch((err) => { if (!cancelled) setError(describePurchasingError(err, 'Could not load this order.')) })
     return () => { cancelled = true }
-  }, [poId])
+  }, [poId, canManage])
 
   async function close() {
     if (closeNote.trim().length < 3) { setError('Add a short note (why it is closed).'); return }
@@ -302,7 +334,8 @@ function PoView({ poId, canManage, onClose, onReceive, onChanged }: {
             <table className="w-full text-[13px]">
               <thead><tr className="border-b border-mint/70 dark:border-border bg-muted/60 text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
                 <th className="px-3 py-2.5 text-left">Item</th><th className="px-3 py-2.5 text-right">Ordered</th>
-                <th className="px-3 py-2.5 text-right">Received</th><th className="px-3 py-2.5 text-right">Cost</th>
+                <th className="px-3 py-2.5 text-right">Accepted</th><th className="px-3 py-2.5 text-right">Rejected</th>
+                {canManage && <th className="px-3 py-2.5 text-right">Cost</th>}
               </tr></thead>
               <tbody>
                 {detail.lines.map((l) => (
@@ -311,14 +344,21 @@ function PoView({ poId, canManage, onClose, onReceive, onChanged }: {
                       {l.variant_label_snapshot && <span className="block text-[11.5px] text-muted-foreground">{l.variant_label_snapshot}</span>}</td>
                     <td className="px-3 py-2.5 text-right tabular-nums">{l.quantity}</td>
                     <td className={cn('px-3 py-2.5 text-right tabular-nums', l.received_quantity < l.quantity ? 'text-amber-600 dark:text-amber-400' : 'text-primary')}>{l.received_quantity}</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums whitespace-nowrap">{formatRupeesFromCents(l.unit_cost_cents)}</td>
+                    <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">{l.rejected_quantity}</td>
+                    {canManage && (
+                      <td className="px-3 py-2.5 text-right tabular-nums whitespace-nowrap">
+                        {lineCosts.get(l.id)?.cents == null ? 'Pending' : formatRupeesFromCents(lineCosts.get(l.id)?.cents ?? 0)}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
             </table>
-            <div className="flex justify-between border-t border-mint/70 dark:border-border px-3 py-2.5 font-bold">
-              <span>Total</span><span className="tabular-nums">{formatRupeesFromCents(detail.po.total_cents)}</span>
-            </div>
+            {canManage && poCost && (
+              <div className="flex justify-between border-t border-mint/70 dark:border-border px-3 py-2.5 font-bold">
+                <span>Total{poCost.pending ? ' (some costs pending)' : ''}</span><span className="tabular-nums">{formatRupeesFromCents(poCost.cents ?? 0)}</span>
+              </div>
+            )}
           </section>
           {detail.po.note && <p className="text-[13px]"><span className="text-muted-foreground">Note: </span>{detail.po.note}</p>}
           {detail.po.close_note && <p className="text-[13px]"><span className="text-muted-foreground">Closed: </span>{detail.po.close_note}</p>}

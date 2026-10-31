@@ -1,8 +1,8 @@
 -- ============================================================================
 -- Apple Expert - suppliers, purchase orders, supplier returns and payments
 -- ----------------------------------------------------------------------------
--- Run AFTER migrations 20261028120000 and 20261028160000 and the seed, as
--- postgres:
+-- Updated for 20261101110000 and 20261101130000. NOT YET EXECUTED against them.
+-- Run AFTER all migrations and the seed, as postgres:
 --
 --   docker exec -i supabase_db_apple-expert psql -U postgres \
 --     < supabase/tests/verify_purchase_returns.sql
@@ -20,6 +20,7 @@
 begin;
 delete from public.inventory_movements where product_id like 'pt-%';
 delete from public.supplier_return_items where product_id like 'pt-%';
+delete from public.supplier_payment_allocations where grn_id in (select id from public.grns where supplier_name like 'PT %');
 update public.inventory_units set supplier_return_id = null where product_id like 'pt-%';
 delete from public.supplier_returns where supplier_id in (select id from public.suppliers where name like 'PT %');
 delete from public.supplier_payments where supplier_id in (select id from public.suppliers where name like 'PT %');
@@ -55,9 +56,9 @@ insert into public.user_roles (profile_id, role) values
   ('81111111-1111-1111-1111-111111111111', 'admin'),
   ('82222222-2222-2222-2222-222222222222', 'staff');
 
-insert into public.products (id, name, category_id, subcategory, stock, is_active) values
-  ('pt-pad',  'PT Pad',  (select id from public.categories where slug = 'accessories'), 'Other Accessories', 0, true),
-  ('pt-case', 'PT Case', (select id from public.categories where slug = 'accessories'), 'Other Accessories', 0, true);
+insert into public.products (id, name, category_id, subcategory, stock, is_active, tracking_mode) values
+  ('pt-pad',  'PT Pad',  (select id from public.categories where slug = 'accessories'), 'Other Accessories', 0, true, 'unit'),
+  ('pt-case', 'PT Case', (select id from public.categories where slug = 'accessories'), 'Other Accessories', 0, true, 'unit');
 
 insert into public.product_variants (id, product_id, legacy_key, name, stock) values
   ('8a000000-0000-0000-0000-00000000000a', 'pt-pad', 'v1', 'Blue 128GB', null),
@@ -91,6 +92,12 @@ begin
   raise exception '% FAILED - statement succeeded: %', p_label, p_sql;
 end $$;
 
+create function pg_temp.receive(p_supplier uuid, p_po uuid, p_invoice text, p_on date, p_lines jsonb, p_req uuid default gen_random_uuid()) returns jsonb language sql as $$
+  select public.admin_receive_goods('supplier', p_supplier, null, p_po, p_invoice, false, null, p_on, null, p_lines, p_req) $$;
+
+create function pg_temp.line(p_product text, p_variant uuid, p_qty integer, p_cost bigint) returns jsonb language sql as $$
+  select jsonb_strip_nulls(jsonb_build_object('product_id', p_product, 'variant_id', p_variant, 'received_quantity', p_qty, 'unit_cost_cents', p_cost)) $$;
+
 do $$
 declare
   c_admin    constant text := '81111111-1111-1111-1111-111111111111';
@@ -119,12 +126,12 @@ begin
   -- P1 roles ---------------------------------------------------------------
   perform pg_temp.as_user(c_staff);
   perform pg_temp.expect_fail('P1a staff supplier',
-    $q$select public.admin_save_supplier(null, 'PT Staffco', null, null, null, null, null, 0, true)$q$,
+    $q$select public.admin_save_supplier(null, 'PT Staffco', null, null, null, null, null, null, null, true)$q$,
     'insufficient_privilege:%');
   perform pg_temp.expect_fail('P1b staff balances',
     'select * from public.admin_supplier_balances()', 'insufficient_privilege:%');
   perform pg_temp.expect_fail('P1c staff payment',
-    format('select public.admin_record_supplier_payment(gen_random_uuid(), %L::date, 100, ''cash'', null, null, gen_random_uuid())', v_today),
+    format('select public.admin_record_supplier_payment(gen_random_uuid(), %L::date, 100, ''cash'', null, null, null, gen_random_uuid())', v_today),
     'insufficient_privilege:%');
   perform pg_temp.as_user(c_customer);
   perform pg_temp.expect_fail('P1d customer PO',
@@ -138,20 +145,20 @@ begin
   -- P2 suppliers -----------------------------------------------------------
   perform pg_temp.as_user(c_admin);
   v_res := public.admin_save_supplier(null, 'PT Alpha Traders', 'Rizwan', '077 123 4567', 'Sales@Alpha.lk',
-                                      'Main St, Kinniya', null, 1000000, true);
+                                      'Main St, Kinniya', null, 1000000, 'agreed with supplier', true);
   v_sup_a := (v_res ->> 'id')::uuid;
   if v_res ->> 'supplier_code' !~ '^SUP-[0-9]{4,}$' then
     raise exception 'P2a FAILED - supplier code %', v_res ->> 'supplier_code';
   end if;
-  v_sup_b := (public.admin_save_supplier(null, 'PT Beta Imports', null, null, null, null, null, 0, true) ->> 'id')::uuid;
+  v_sup_b := (public.admin_save_supplier(null, 'PT Beta Imports', null, null, null, null, null, null, null, true) ->> 'id')::uuid;
   perform pg_temp.expect_fail('P2b duplicate name',
-    $q$select public.admin_save_supplier(null, '  pt alpha traders ', null, null, null, null, null, 0, true)$q$,
+    $q$select public.admin_save_supplier(null, '  pt alpha traders ', null, null, null, null, null, null, null, true)$q$,
     'duplicate_supplier:%');
   perform pg_temp.expect_fail('P2c bad email',
-    $q$select public.admin_save_supplier(null, 'PT Gamma', null, null, 'not-an-email', null, null, 0, true)$q$,
+    $q$select public.admin_save_supplier(null, 'PT Gamma', null, null, 'not-an-email', null, null, null, null, true)$q$,
     'invalid_email:%');
   perform public.admin_save_supplier(v_sup_a, 'PT Alpha Traders', 'Rizwan M', '077 123 4567', 'sales@alpha.lk',
-                                     'Main St, Kinniya', 'Pays in 30 days', 1000000, true);
+                                     'Main St, Kinniya', 'Pays in 30 days', 1000000, null, true);
   if (select contact_person from public.suppliers where id = v_sup_a) <> 'Rizwan M'
      or (select email from public.suppliers where id = v_sup_a) <> 'sales@alpha.lk' then
     raise exception 'P2d FAILED - update not saved';
@@ -170,7 +177,7 @@ begin
   perform pg_temp.as_user(c_admin);
   perform pg_temp.expect_fail('P3a variant required',
     format('select public.admin_create_purchase_order(%L, %L::date, null, null, %L::jsonb, gen_random_uuid())',
-           v_sup_a, v_today, jsonb_build_array(jsonb_build_object('product_id', 'pt-pad', 'quantity', 2))),
+           v_sup_a, v_today, jsonb_build_array(jsonb_build_object('product_id', 'pt-pad', 'quantity', 2, 'unit_cost_cents', 100))),
     'variant_required:%');
   v_req := gen_random_uuid();
   v_lines := jsonb_build_array(
@@ -181,19 +188,19 @@ begin
   if (public.admin_create_purchase_order(v_sup_a, v_today, v_today + 7, 'First order', v_lines, v_req) ->> 'id')::uuid <> v_po then
     raise exception 'P3b FAILED - replay created a second PO';
   end if;
-  if (select total_cents from public.purchase_orders where id = v_po) <> 3 * 12000000 + 5 * 150000
+  -- Money is read through the checked function: the column is not granted.
+  if (select cents from public.admin_purchase_costs('po', array[v_po])) <> 3 * 12000000 + 5 * 150000
      or (select status from public.purchase_orders where id = v_po) <> 'open'
      or (select count(*) from public.purchase_order_lines where purchase_order_id = v_po) <> 2 then
     raise exception 'P3c FAILED - PO totals or lines wrong';
   end if;
   raise notice 'P3 ok - PO created with lines and total, replay safe, variant required';
 
-  -- P4 receive against the PO ------------------------------------------------
-  v_res := public.admin_receive_goods(v_sup_a, v_po, 'INV-1', v_today, null,
+  -- P4 receive against the PO, one line partly rejected -------------------------
+  v_res := pg_temp.receive(v_sup_a, v_po, 'INV-1', v_today,
     jsonb_build_array(
-      jsonb_build_object('product_id', 'pt-pad', 'variant_id', c_va, 'quantity', 2, 'unit_cost_cents', 12000000),
-      jsonb_build_object('product_id', 'pt-case', 'quantity', 5, 'unit_cost_cents', 150000)),
-    gen_random_uuid());
+      pg_temp.line('pt-pad', c_va, 2, 12000000),
+      pg_temp.line('pt-case', null, 5, 150000)));
   if (select supplier_id from public.grns where id = (v_res ->> 'id')::uuid) <> v_sup_a
      or (select purchase_order_id from public.grns where id = (v_res ->> 'id')::uuid) <> v_po then
     raise exception 'P4a FAILED - GRN not linked to supplier / PO';
@@ -206,19 +213,26 @@ begin
   if (select stock from public.products where id = 'pt-pad') <> 2 or (select stock from public.products where id = 'pt-case') <> 5 then
     raise exception 'P4c FAILED - stock not raised';
   end if;
-  raise notice 'P4 ok - goods received against the PO: GRN linked, PO counted, stock raised';
+  -- The same invoice again is a possible duplicate, until a person confirms it.
+  perform pg_temp.expect_fail('P4d possible duplicate delivery',
+    format('select pg_temp.receive(%L, null, %L, %L::date, %L::jsonb)', v_sup_a, ' inv-1 ', v_today,
+           jsonb_build_array(pg_temp.line('pt-case', null, 1, 150000))),
+    'possible_duplicate_delivery:%');
+  -- Another supplier's invoice with the same number is unrelated.
+  perform pg_temp.receive(v_sup_b, null, 'INV-1', v_today, jsonb_build_array(pg_temp.line('pt-case', null, 1, 140000)));
+  raise notice 'P4 ok - goods received against the PO: GRN linked, PO counted, stock raised, duplicates caught per supplier';
 
   -- P5 over-receiving is refused and changes nothing -------------------------
   select count(*) into v_n from public.grns where supplier_name like 'PT %';
   perform pg_temp.expect_fail('P5a over receive',
-    format('select public.admin_receive_goods(%L, %L, null, %L::date, null, %L::jsonb, gen_random_uuid())',
+    format('select pg_temp.receive(%L, %L, null, %L::date, %L::jsonb)',
            v_sup_a, v_po, v_today,
-           jsonb_build_array(jsonb_build_object('product_id', 'pt-pad', 'variant_id', c_va, 'quantity', 2))),
+           jsonb_build_array(pg_temp.line('pt-pad', c_va, 2, 12000000))),
     'exceeds_purchase_order:%');
   perform pg_temp.expect_fail('P5b item not on PO',
-    format('select public.admin_receive_goods(%L, %L, null, %L::date, null, %L::jsonb, gen_random_uuid())',
+    format('select pg_temp.receive(%L, %L, null, %L::date, %L::jsonb)',
            v_sup_a, v_po, v_today,
-           jsonb_build_array(jsonb_build_object('product_id', 'pt-pad', 'variant_id', c_vb, 'quantity', 1))),
+           jsonb_build_array(pg_temp.line('pt-pad', c_vb, 1, 12000000))),
     'exceeds_purchase_order:%');
   if (select count(*) from public.grns where supplier_name like 'PT %') <> v_n
      or (select stock from public.products where id = 'pt-pad') <> 2
@@ -226,18 +240,17 @@ begin
     raise exception 'P5c FAILED - a refused receipt left something behind';
   end if;
   perform pg_temp.expect_fail('P5d PO from other supplier',
-    format('select public.admin_receive_goods(%L, %L, null, %L::date, null, %L::jsonb, gen_random_uuid())',
+    format('select pg_temp.receive(%L, %L, null, %L::date, %L::jsonb)',
            v_sup_b, v_po, v_today,
-           jsonb_build_array(jsonb_build_object('product_id', 'pt-case', 'quantity', 1))),
+           jsonb_build_array(pg_temp.line('pt-case', null, 1, 150000))),
     'purchase_order_mismatch:%');
   raise notice 'P5 ok - receiving more than ordered, or another supplier''s PO, is refused atomically';
 
   -- P6 receive without a PO, from supplier B ---------------------------------
-  v_res := public.admin_receive_goods(v_sup_b, null, null, v_today, null,
-    jsonb_build_array(jsonb_build_object('product_id', 'pt-case', 'quantity', 2, 'unit_cost_cents', 140000)),
-    gen_random_uuid());
+  v_res := pg_temp.receive(v_sup_b, null, null, v_today, jsonb_build_array(pg_temp.line('pt-case', null, 2, 140000)));
   v_grn_b := (v_res ->> 'id')::uuid;
-  if (select stock from public.products where id = 'pt-case') <> 7 then
+  -- 5 against the PO, 1 from supplier B in P4, 2 here.
+  if (select stock from public.products where id = 'pt-case') <> 8 then
     raise exception 'P6 FAILED - stock after supplier B GRN';
   end if;
   raise notice 'P6 ok - GRN without a PO for another supplier';
@@ -250,12 +263,12 @@ begin
   perform pg_temp.expect_fail('P7b close twice',
     format('select public.admin_close_purchase_order(%L, ''again'')', v_po), 'purchase_order_finished:%');
   perform pg_temp.expect_fail('P7c receive on closed',
-    format('select public.admin_receive_goods(%L, %L, null, %L::date, null, %L::jsonb, gen_random_uuid())',
+    format('select pg_temp.receive(%L, %L, null, %L::date, %L::jsonb)',
            v_sup_a, v_po, v_today,
-           jsonb_build_array(jsonb_build_object('product_id', 'pt-pad', 'variant_id', c_va, 'quantity', 1))),
+           jsonb_build_array(pg_temp.line('pt-pad', c_va, 1, 12000000))),
     'purchase_order_finished:%');
   v_po2 := (public.admin_create_purchase_order(v_sup_a, v_today, null, null,
-              jsonb_build_array(jsonb_build_object('product_id', 'pt-case', 'quantity', 1)), gen_random_uuid()) ->> 'id')::uuid;
+              jsonb_build_array(jsonb_build_object('product_id', 'pt-case', 'quantity', 1, 'cost_pending', true)), gen_random_uuid()) ->> 'id')::uuid;
   perform public.admin_close_purchase_order(v_po2, 'Ordered by mistake');
   if (select status from public.purchase_orders where id = v_po2) <> 'cancelled' then
     raise exception 'P7d FAILED - untouched PO not cancelled';
@@ -267,42 +280,42 @@ begin
     from public.inventory_units u join public.grns g on g.id = u.grn_id
    where u.product_id = 'pt-case' and g.supplier_id = v_sup_a;
   perform pg_temp.expect_fail('P8a wrong supplier',
-    format('select public.admin_create_supplier_return(%L, %L::date, ''credit'', %L::text[], null, gen_random_uuid())',
+    format('select public.admin_create_supplier_return(%L, %L::date, ''credit'', %L::text[], null, null, gen_random_uuid())',
            v_sup_b, v_today, array[v_codes[1]]),
     'wrong_supplier:%');
   perform pg_temp.expect_fail('P8b duplicate scan',
-    format('select public.admin_create_supplier_return(%L, %L::date, ''credit'', %L::text[], null, gen_random_uuid())',
+    format('select public.admin_create_supplier_return(%L, %L::date, ''credit'', %L::text[], null, null, gen_random_uuid())',
            v_sup_a, v_today, array[v_codes[1], lower(v_codes[1])]),
     'duplicate_item:%');
   v_req := gen_random_uuid();
-  v_res := public.admin_create_supplier_return(v_sup_a, v_today, 'credit', array[v_codes[1], v_codes[2]], 'Cracked', v_req);
+  v_res := public.admin_create_supplier_return(v_sup_a, v_today, 'credit', array[v_codes[1], v_codes[2]], null, 'Cracked', v_req);
   if (v_res ->> 'total_cents')::bigint <> 300000 or (v_res ->> 'total_units')::integer <> 2 then
     raise exception 'P8c FAILED - return totals %', v_res;
   end if;
-  if (public.admin_create_supplier_return(v_sup_a, v_today, 'credit', array[v_codes[1], v_codes[2]], 'Cracked', v_req) ->> 'id')
+  if (public.admin_create_supplier_return(v_sup_a, v_today, 'credit', array[v_codes[1], v_codes[2]], null, 'Cracked', v_req) ->> 'id')
      <> v_res ->> 'id' then
     raise exception 'P8d FAILED - replay created a second return';
   end if;
-  if (select stock from public.products where id = 'pt-case') <> 5
+  if (select stock from public.products where id = 'pt-case') <> 6
      or (select count(*) from public.inventory_units where barcode = any (v_codes[1:2]) and status = 'returned_to_supplier') <> 2 then
     raise exception 'P8e FAILED - stock or unit status after return';
   end if;
   perform pg_temp.expect_fail('P8f return again',
-    format('select public.admin_create_supplier_return(%L, %L::date, ''cash'', %L::text[], null, gen_random_uuid())',
+    format('select public.admin_create_supplier_return(%L, %L::date, ''cash'', %L::text[], null, null, gen_random_uuid())',
            v_sup_a, v_today, array[v_codes[1]]),
     'unit_not_available:%');
-  perform public.admin_create_supplier_return(v_sup_a, v_today, 'cash', array[v_codes[3]], null, gen_random_uuid());
+  perform public.admin_create_supplier_return(v_sup_a, v_today, 'cash', array[v_codes[3]], null, null, gen_random_uuid());
   raise notice 'P8 ok - units go back to the right supplier only, once; stock falls; replay safe';
 
   -- P9 payments and balance -------------------------------------------------------
   perform pg_temp.expect_fail('P9a cheque needs number',
-    format('select public.admin_record_supplier_payment(%L, %L::date, 100000, ''cheque'', null, null, gen_random_uuid())', v_sup_a, v_today),
+    format('select public.admin_record_supplier_payment(%L, %L::date, 100000, ''cheque'', null, null, null, gen_random_uuid())', v_sup_a, v_today),
     'reference_required:%');
   perform pg_temp.expect_fail('P9b zero amount',
-    format('select public.admin_record_supplier_payment(%L, %L::date, 0, ''cash'', null, null, gen_random_uuid())', v_sup_a, v_today),
+    format('select public.admin_record_supplier_payment(%L, %L::date, 0, ''cash'', null, null, null, gen_random_uuid())', v_sup_a, v_today),
     'invalid_amount:%');
-  perform public.admin_record_supplier_payment(v_sup_a, v_today, 10000000, 'bank_transfer', 'TRX-1', null, gen_random_uuid());
-  v_pay := (public.admin_record_supplier_payment(v_sup_a, v_today, 500000, 'cheque', 'CHQ-77', null, gen_random_uuid()) ->> 'id')::uuid;
+  perform public.admin_record_supplier_payment(v_sup_a, v_today, 10000000, 'bank_transfer', 'TRX-1', null, null, gen_random_uuid());
+  v_pay := (public.admin_record_supplier_payment(v_sup_a, v_today, 500000, 'cheque', 'CHQ-77', null, null, gen_random_uuid()) ->> 'id')::uuid;
   perform public.admin_void_supplier_payment(v_pay, 'Cheque bounced');
   perform pg_temp.expect_fail('P9c void twice',
     format('select public.admin_void_supplier_payment(%L, ''again'')', v_pay), 'payment_voided:%');
@@ -322,7 +335,7 @@ begin
   -- P10 the ledger still agrees with the shelf ------------------------------------
   perform pg_temp.as_user(c_admin);
   if (select stock from public.products where id = 'pt-case')
-       <> (select count(*) from public.inventory_units where product_id = 'pt-case' and status = 'in_stock')
+       <> (select count(*) from public.inventory_units where product_id = 'pt-case' and status in ('in_stock', 'reserved'))
      or (select stock from public.products where id = 'pt-case')
        <> (select sum(delta) from public.inventory_movements where product_id = 'pt-case') then
     raise exception 'P10 FAILED - stock, shelf units and ledger disagree';
@@ -336,3 +349,14 @@ $$;
 rollback;
 
 \connect "dbname=postgres user=postgres"
+
+-- Remove the committed fixtures, so test products never linger on the local shop.
+begin;
+update public.products set stock = 0 where id like 'pt-%';
+delete from public.product_prices where product_id like 'pt-%';
+delete from public.product_variants where product_id like 'pt-%';
+delete from public.products where id like 'pt-%';
+delete from auth.users where id in ('81111111-1111-1111-1111-111111111111',
+                                    '82222222-2222-2222-2222-222222222222',
+                                    '83333333-3333-3333-3333-333333333333');
+commit;

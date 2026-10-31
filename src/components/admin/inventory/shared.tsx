@@ -31,6 +31,7 @@ const STATUS_CLASS: Record<UnitStatus, string> = {
   sold: 'bg-muted text-muted-foreground border-border',
   written_off: 'bg-red-500/8 text-red-600 dark:text-red-400 border-red-500/25',
   returned_to_supplier: 'bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-500/30',
+  quarantined: 'bg-orange-500/10 text-orange-700 dark:text-orange-300 border-orange-500/30',
 }
 
 export function UnitStatusBadge({ status }: { status: string }) {
@@ -61,7 +62,7 @@ export function PrintLabels({ items, fileName, label = 'Print labels' }: {
     setBusy(true)
     setError(null)
     try {
-      openPdf(await buildLabelPdf(items, layout), fileName)
+      await openPdf(await buildLabelPdf(items, layout), fileName)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create the labels.')
     } finally {
@@ -86,6 +87,14 @@ export function PrintLabels({ items, fileName, label = 'Print labels' }: {
       {error && <ErrorNote message={error} />}
     </div>
   )
+}
+
+/**
+ * A cost typed by a person, keeping "not entered" apart from zero, because a blank
+ * cost must never become a free item. 'blank' | cents | null when not valid.
+ */
+export function parseCost(text: string): number | 'blank' | null {
+  return text.trim() === '' ? 'blank' : parseRupees(text)
 }
 
 /** Rupees typed by a person -> cents, or null when not a valid amount. */
