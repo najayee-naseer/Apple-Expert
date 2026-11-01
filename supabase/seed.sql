@@ -4884,9 +4884,10 @@ insert into public.featured_products (slot, product_id, position)
 values ('home', 'part-iphone-15-pro-display', 5)
 on conflict (slot, product_id) do update set position = excluded.position, is_active = true;
 
--- ---------- category tracking rules (mirror migrations 20261028120000 + 20261101100000) ----------
+-- ---------- category tracking rules (mirror migrations 20261028120000, 20261101100000 + 20261101140000) ----------
 update public.categories set requires_serial = true where slug = 'iphone';
 update public.categories set default_tracking_mode = 'unit' where slug in ('iphone', 'ipad', 'mac', 'watch', 'airpods');
+update public.categories set allows_shared_barcode = true where slug in ('accessories', 'parts', 'batteries', 'displays');
 -- ---------- derived condition / warranty rows (mirror migrations 20261002120000 + 20261003120000) ----------
 update public.products
    set warranty_type = case when warranty_status = 'active' then 'included' else 'none' end

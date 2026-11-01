@@ -12,7 +12,7 @@ import {
 } from '@/lib/admin/units'
 import { setGrnLineCost, correctGrnLine, describePurchasingError } from '@/lib/admin/purchasing'
 import { ErrorNote, SuccessNote, parseRupees } from './shared'
-import { ShelfLabelsPanel, UnitLabelsPanel } from './LabelPanels'
+import { QuantityLabelPanels, UnitLabelsPanel } from './LabelPanels'
 
 const CONTROL =
   'focus-ring w-full rounded-xl border border-mint-deep dark:border-border bg-card px-3 py-2 text-sm text-foreground focus:outline-none focus:border-primary/45 disabled:opacity-60'
@@ -150,7 +150,7 @@ export function GrnDetail({ grnId, showMoney, justPosted, onClose, onChanged }: 
 
           {data.units.length > 0 && <UnitLabelsPanel units={data.units} lines={data.lines} grnNumber={data.grn.grn_number} />}
           {data.lines.some((l) => l.tracking_mode_snapshot === 'quantity') && (
-            <ShelfLabelsPanel lines={data.lines.filter((l) => l.tracking_mode_snapshot === 'quantity')} grnNumber={data.grn.grn_number} />
+            <QuantityLabelPanels lines={data.lines.filter((l) => l.tracking_mode_snapshot === 'quantity')} grnNumber={data.grn.grn_number} />
           )}
         </>
       )}

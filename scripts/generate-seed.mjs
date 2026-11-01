@@ -328,9 +328,10 @@ S('');
 // New, which is what every bundled variant is.
 // ---------------------------------------------------------------------------
 // Same trap as below: these two migration updates find no categories locally.
-S('-- ---------- category tracking rules (mirror migrations 20261028120000 + 20261101100000) ----------');
+S('-- ---------- category tracking rules (mirror migrations 20261028120000, 20261101100000 + 20261101140000) ----------');
 S(`update public.categories set requires_serial = true where slug = 'iphone';`);
 S(`update public.categories set default_tracking_mode = 'unit' where slug in ('iphone', 'ipad', 'mac', 'watch', 'airpods');`);
+S(`update public.categories set allows_shared_barcode = true where slug in ('accessories', 'parts', 'batteries', 'displays');`);
 S('-- ---------- derived condition / warranty rows (mirror migrations 20261002120000 + 20261003120000) ----------');
 S(`update public.products
    set warranty_type = case when warranty_status = 'active' then 'included' else 'none' end

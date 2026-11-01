@@ -48,6 +48,8 @@ declare -a SUITES=(
   "verify_grn_units_pos.sql|ALL GRN / UNIT / POS CHECKS PASSED"
   "verify_purchase_returns.sql|ALL PURCHASE & RETURNS CHECKS PASSED"
   "verify_inventory_master.sql|ALL INVENTORY MASTER CHECKS PASSED"
+  "verify_dual_barcodes.sql|ALL DUAL BARCODE CHECKS PASSED"
+  "verify_pos_checkout.sql|ALL POS CHECKOUT CHECKS PASSED"
 )
 
 FAILED=0

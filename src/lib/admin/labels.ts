@@ -11,7 +11,10 @@ import type { UnitView } from './units'
  *     read it) with the value printed underneath
  *   - the IMEI / serial number when the unit has one
  *
- * Quantity-tracked items get a plain shelf label instead (below), never a code.
+ * A quantity-tracked accessory or part with a shop barcode gets a product label
+ * (buildProductLabelPdf): the same layout and the same code on every copy, tagged
+ * PRODUCT so it is never read as one item's identity. Anything else quantity-tracked
+ * gets a plain shelf label (below), never a code.
  *
  * Everything is drawn as vectors except the QR, so the bars stay sharp on any
  * printer. jsPDF and qrcode are loaded only when a label is actually printed.
@@ -29,6 +32,8 @@ export interface LabelItem {
   serial: string | null
   title: string
   subtitle: string | null
+  /** Set on a product label: the tag and the line under the name. */
+  shared?: boolean
 }
 
 export function unitToLabel(unit: UnitView): LabelItem {
@@ -115,6 +120,7 @@ async function drawLabel(doc: PdfDoc, item: LabelItem, x: number, y: number) {
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(5.5)
   doc.text('APPLE EXPERT', textX, y + 3.8)
+  if (item.shared) doc.text('PRODUCT', x + LABEL_W - margin, y + 3.8, { align: 'right' })
 
   let cursor = y + 6.8
   doc.setFontSize(7.5)
@@ -133,6 +139,9 @@ async function drawLabel(doc: PdfDoc, item: LabelItem, x: number, y: number) {
     const line = serialLine(item.serial)
     shrinkToFit(doc, line, textW, 6, 4.5)
     doc.text(line, textX, cursor)
+  } else if (item.shared) {
+    doc.setFontSize(5.5)
+    doc.text('Same code on all', textX, cursor)
   }
 
   // Code 128 across the bottom, its value underneath for reading by eye.
@@ -144,7 +153,7 @@ async function drawLabel(doc: PdfDoc, item: LabelItem, x: number, y: number) {
 }
 
 /**
- * A label for a quantity-tracked item, which has no barcode in the database. It
+ * A label for a quantity-tracked item with no barcode in the database. It
  * deliberately carries no code of any kind: nothing could resolve it at the counter.
  * Every copy is the same, and the label says so, so a sticker is never mistaken for
  * the identity of one physical item.
@@ -204,6 +213,16 @@ export async function buildShelfLabelPdf(items: ShelfLabelItem[], layout: LabelL
 /** Builds the barcode label PDF and returns it as a Blob. */
 export async function buildLabelPdf(items: LabelItem[], layout: LabelLayout): Promise<Blob> {
   return renderLabels(items, layout, drawLabel)
+}
+
+/** Builds product labels: `copies` identical labels carrying the shop barcode. */
+export async function buildProductLabelPdf(
+  items: { barcode: string; title: string; subtitle: string | null; copies: number }[],
+  layout: LabelLayout,
+): Promise<Blob> {
+  const labels: LabelItem[] = items.flatMap((i) =>
+    Array.from({ length: i.copies }, () => ({ barcode: i.barcode, serial: null, title: i.title, subtitle: i.subtitle, shared: true })))
+  return renderLabels(labels, layout, drawLabel)
 }
 
 /** Places one label per sticker page, or 24 per A4 sheet with light cut marks. */

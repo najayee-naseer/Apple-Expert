@@ -1,12 +1,14 @@
 "use client"
 
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, useSyncExternalStore, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ShieldCheck, Eye, EyeOff, LoaderCircle, AlertCircle, ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { useAdminAuth } from '@/context/AdminAuthContext'
 import { getSupabaseClient, isSupabaseConfigured } from '@/lib/supabase/client'
+
+const noop = () => () => {}
 
 /**
  * Administrator sign-in.
@@ -21,6 +23,9 @@ import { getSupabaseClient, isSupabaseConfigured } from '@/lib/supabase/client'
 export default function AdminLoginPage() {
   const router = useRouter()
   const { status, refresh } = useAdminAuth()
+  // Before React attaches, the browser would submit this form itself and put the
+  // password in the URL. So the button waits; it also stops Enter submitting.
+  const ready = useSyncExternalStore(noop, () => true, () => false)
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -144,7 +149,7 @@ export default function AdminLoginPage() {
             </p>
           )}
 
-          <Button type="submit" fullWidth size="lg" disabled={submitting}>
+          <Button type="submit" fullWidth size="lg" disabled={submitting || !ready}>
             {submitting ? (
               <>
                 <LoaderCircle size={17} className="mr-2 animate-spin motion-reduce:animate-none" />
@@ -154,6 +159,11 @@ export default function AdminLoginPage() {
               'Sign in'
             )}
           </Button>
+
+          <p className="mt-3.5 text-center text-[12px] leading-snug text-muted-foreground">
+            On this device, signing in here replaces any customer account that is signed in.
+            Signing out ends both.
+          </p>
         </form>
 
         <div className="mt-5 text-center">

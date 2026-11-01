@@ -18,7 +18,16 @@ select id from auth.users where id in (
   '61111111-1111-1111-1111-111111111111', '62222222-2222-2222-2222-222222222222', '63333333-3333-3333-3333-333333333333');
 
 create temp table fx_products on commit drop as
-select id from public.products where id ~ '^(gt|pt|mt|cc)-';
+select id from public.products where id ~ '^(gt|pt|mt|cc|db)-';
+
+delete from public.inventory_audit_log
+ where entity_type = 'product_barcode'
+   and entity_id in (select b.id::text from public.product_barcodes b where b.product_id in (select id from fx_products));
+
+delete from public.barcode_registry
+ where unit_id in (select u.id from public.inventory_units u where u.product_id in (select id from fx_products))
+    or product_barcode_id in (select b.id from public.product_barcodes b where b.product_id in (select id from fx_products));
+delete from public.product_barcodes where product_id in (select id from fx_products);
 
 delete from public.inventory_audit_log
  where actor_id in (select id from fx_users)

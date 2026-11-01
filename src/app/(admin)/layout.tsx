@@ -14,8 +14,8 @@ import "../globals.css";
  *
  * Deliberately NOT included here: AppShell, BottomNavigation, CartProvider and
  * WishlistProvider. The admin panel is a full-width dashboard, not the 480px
- * mobile storefront shell, and it has no cart. This is also why no admin entry
- * can appear in the customer navigation — the two trees share no chrome.
+ * mobile storefront shell, and it has no cart. The two trees share no chrome, so
+ * the customer app reaches this one only through lib/admin/entry.ts.
  */
 export const metadata: Metadata = {
   title: "Apple Expert — Admin",

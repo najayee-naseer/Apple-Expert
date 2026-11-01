@@ -116,6 +116,23 @@ GoTrue's public `/auth/v1/settings` document:
 **There is no fake mode.** No hardcoded code, no simulated delivery, no branch
 that can report a verified number without GoTrue having verified it.
 
+### Testing SMS against local Supabase
+
+Production delivers codes through the Send SMS hook in
+`supabase/functions/send-sms`, which sends through SMSlenz. Local Supabase runs the
+same hook, configured in `supabase/config.toml` with a signing secret from
+`supabase/.env`. That file is git-ignored and holds local values only.
+
+1. Add `SMSLENZ_USER_ID`, `SMSLENZ_API_KEY` and `SMSLENZ_SENDER_ID` to `supabase/.env`.
+   Without them the hook refuses and no code is sent.
+2. Run `npx supabase start`, then
+   `npx supabase functions serve --env-file supabase/.env --no-verify-jwt`.
+   The runtime started by `supabase start` alone does not load these secrets.
+
+Real codes cost SMS credit. Local codes last 6000 seconds because the CLI fixes that
+value; production's is set in its dashboard. Never run `supabase config push` from
+this config: it would send production's hook to `host.docker.internal`.
+
 ### When the SMS provider is purchased
 
 1. In the Supabase dashboard: **Authentication → Providers → Phone** → enable,

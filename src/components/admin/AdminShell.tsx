@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils'
 import { useTheme } from '@/context/ThemeContext'
 import { useAdminAuth } from '@/context/AdminAuthContext'
 import { ROLE_LABEL } from '@/lib/admin/roles'
+import { clearExperience } from '@/utils/experience'
 import { navForRole, isAdminNavActive, isNavGroup, type AdminNavGroup } from './adminNav'
 
 function NavGroup({ group, pathname, onNavigate }: {
@@ -139,6 +140,20 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const { theme, toggleTheme } = useTheme()
   const { email, role, signOut } = useAdminAuth()
 
+  /**
+   * Back to the customer app, signed out. The session is shared with it, so this
+   * ends any customer sign-in on this device as well, and the next person chooses
+   * their customer type afresh, as a customer sign-out does. A page load, because
+   * the store is a different root layout.
+   */
+  async function leaveToStore() {
+    await signOut()
+    clearExperience()
+    // Not the router: AdminGuard is redirecting to /admin/login at this moment.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+    window.location.assign('/')
+  }
+
   // The drawer is closed by every link's onNavigate, the close button and the
   // overlay, so no route-change effect is needed.
 
@@ -249,7 +264,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 
               <button
                 type="button"
-                onClick={() => void signOut()}
+                onClick={() => void leaveToStore()}
                 className="focus-ring flex items-center gap-1.5 h-10 px-3 rounded-xl border border-mint-deep bg-card text-sm font-semibold text-foreground hover:bg-surface-strong active:scale-95 transition"
               >
                 <LogOut size={16} className="text-muted-foreground" />

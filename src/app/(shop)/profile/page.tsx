@@ -12,10 +12,11 @@ import { useCustomerAuth } from '@/context/CustomerAuthContext'
 import { useGuestMode, endGuestSession } from '@/lib/auth/guestMode'
 import { WHOLESALE_REQUEST_PATH } from '@/lib/customer/access'
 import { clearExperience } from '@/utils/experience'
+import { openAdminLogin } from '@/lib/admin/entry'
 import { listOwnRequests, openRequest, latestDecision, type RequestStatus } from '@/lib/customer/wholesale'
 import {
   Moon, Sun, ChevronRight, Package, CreditCard, Settings, HelpCircle, LogOut, Heart,
-  LogIn, Store, Repeat, FlaskConical,
+  LogIn, Store, Repeat, FlaskConical, Briefcase,
 } from 'lucide-react'
 
 export default function ProfilePage() {
@@ -214,6 +215,24 @@ export default function ProfilePage() {
           <Repeat size={19} />
           Switch shopping experience
         </button>
+
+        {/* Every account sees this and it grants nothing: sign-in, AdminGuard and
+            the database decide who gets in. */}
+        {hasSession && (
+          <button
+            onClick={openAdminLogin}
+            className="w-full flex items-center justify-between gap-3 px-4 py-3 mb-4 text-left bg-surface border border-mint/80 dark:border-border hover:bg-primary-soft/60 rounded-[20px] transition-colors min-h-[44px]"
+          >
+            <span className="flex items-center gap-3 min-w-0">
+              <Briefcase size={17} strokeWidth={1.75} className="text-muted-foreground shrink-0" />
+              <span className="min-w-0">
+                <span className="block text-[13px] font-semibold">Business Access</span>
+                <span className="block text-[11.5px] text-muted-foreground">Admin Login for Apple Expert personnel</span>
+              </span>
+            </span>
+            <ChevronRight size={16} className="text-muted-foreground/50 shrink-0" />
+          </button>
+        )}
 
         {/* Sign out */}
         {hasSession && (

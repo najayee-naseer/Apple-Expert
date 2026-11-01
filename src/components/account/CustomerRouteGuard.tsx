@@ -8,6 +8,7 @@ import { decideAccess, type UnavailableReason } from '@/lib/customer/access'
 import { useStoreSettings, type StoreSettings } from '@/lib/store/settings'
 import { hasCompletedOnboarding } from '@/utils/onboarding'
 import { getExperience } from '@/utils/experience'
+import { openAdminLogin } from '@/lib/admin/entry'
 
 /**
  * Route protection for the whole customer app.
@@ -123,6 +124,18 @@ function StoreUnavailable({
           >
             <LogOut size={16} />
             Sign out
+          </button>
+        )}
+
+        {/* Maintenance closes every store screen, so this is how an owner on the
+            APK reaches the setting that reopens them. */}
+        {reason === 'maintenance' && (
+          <button
+            type="button"
+            onClick={openAdminLogin}
+            className="focus-ring mt-4 inline-flex h-11 items-center justify-center rounded-full px-4 text-[12px] font-medium text-muted-foreground hover:text-foreground"
+          >
+            Apple Expert personnel: Admin Login
           </button>
         )}
       </div>

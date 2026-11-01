@@ -27,6 +27,7 @@ import { describeAdminError } from '@/lib/admin/errors'
 import { listMovements, reasonLabel, setTrackingMode, describeStockError, MOVEMENT_LIMIT, type MovementRow, type StockResult } from '@/lib/admin/inventory'
 import { confirmAdjustment } from '@/lib/admin/stockFlow'
 import { StockAdjustDialog } from './StockAdjustDialog'
+import { ProductBarcodesCard } from './ProductBarcodesCard'
 import {
   ConditionEditor, GradesManager, PlanEditor, toDraft, draftToPatch,
   conditionDraftFrom, conditionChanged, planDraftFrom, planChanged,
@@ -665,6 +666,20 @@ export function ProductEditor({ productId, categories, canEdit, onClose, onSaved
                   )}
                 </div>
               </EditorSection>
+
+              {detail && (
+                <EditorSection title="Barcodes"
+                  description="Scanned at the counter. One code means this product or variant, the same on every item.">
+                  <ProductBarcodesCard productId={detail.product.id} productName={detail.product.name}
+                    items={detail.variants.length > 0
+                      ? detail.variants.map((v) => ({
+                          variantId: v.id,
+                          label: v.name,
+                          mode: (v.tracking_mode ?? productMode) === 'unit' ? 'unit' : 'quantity',
+                        }))
+                      : [{ variantId: null, label: null, mode: productMode }]} />
+                </EditorSection>
+              )}
 
               <EditorSection title="Condition"
                 description={hasVariants

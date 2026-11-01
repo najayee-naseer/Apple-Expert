@@ -44,7 +44,7 @@ export function CameraScanner({ onCode, onClose }: { onCode: (code: string) => v
     let lastAt = 0
     let detector: Detector
     try {
-      detector = new Ctor({ formats: ['qr_code', 'code_128', 'ean_13', 'code_39'] })
+      detector = new Ctor({ formats: ['qr_code', 'code_128', 'ean_13', 'ean_8', 'upc_a', 'code_39'] })
     } catch {
       // Listed but unusable on some devices (no barcode service installed).
       window.setTimeout(() => setError('This device cannot read barcodes with the camera. Type the code instead.'), 0)

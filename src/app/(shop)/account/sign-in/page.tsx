@@ -21,6 +21,7 @@ import {
 } from '@/lib/auth/google'
 import { parsePhone, formatE164, DEFAULT_COUNTRY_ISO } from '@/lib/auth/phone'
 import { endGuestSession } from '@/lib/auth/guestMode'
+import { openAdminLogin } from '@/lib/admin/entry'
 
 /**
  * Customer authentication: phone number + SMS one-time code.
@@ -533,6 +534,15 @@ export default function CustomerSignInPage() {
           )}
         </div>
       )}
+
+      {/* Staff may have no customer account, so Profile is out of their reach here. */}
+      <button
+        type="button"
+        onClick={openAdminLogin}
+        className="focus-ring mx-auto mt-3 flex rounded-full px-3 py-2 text-[12px] font-medium text-muted-foreground hover:text-foreground transition-colors"
+      >
+        Apple Expert personnel: Admin Login
+      </button>
     </AuthShell>
   )
 }

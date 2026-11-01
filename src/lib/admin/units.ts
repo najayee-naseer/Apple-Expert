@@ -2,6 +2,7 @@ import { getSupabaseClient } from '@/lib/supabase/client'
 import type { Database } from '@/lib/supabase/database.types'
 import { describeAdminError } from './errors'
 import { newRequestId } from './inventory'
+import { isConnectionError, type PriceChange } from './posCart'
 import type { AdminRole } from './roles'
 
 /**
@@ -452,6 +453,20 @@ export async function lookupUnit(code: string, customerProfileId: string | null)
   return data as unknown as ScannedUnit
 }
 
+/** What a scanned code means: one exact unit, or one exact product/variant. */
+export type PosScanResult =
+  | (ScannedUnit & { reentered_as?: string })
+  | (QuotedProduct & { barcode: string })
+
+export async function posScan(code: string, customerProfileId: string | null): Promise<PosScanResult> {
+  const { data, error } = await getSupabaseClient().rpc('pos_scan', {
+    p_code: code,
+    p_customer_profile_id: customerProfileId,
+  })
+  if (error) throw error
+  return data as unknown as PosScanResult
+}
+
 export async function quoteProduct(productId: string, variantId: string | null, customerProfileId: string | null): Promise<QuotedProduct> {
   const { data, error } = await getSupabaseClient().rpc('pos_quote_product', {
     p_product_id: productId,
@@ -482,6 +497,8 @@ export type PosItemInput =
 
 export interface PosSaleInput {
   items: PosItemInput[]
+  /** What the screen showed, line for line. The server compares it and never charges it. */
+  expectedPrices: { price_cents: number; tier_code: string | null }[]
   paymentMethod: PaymentMethod
   paymentReference: string
   discountCents: number
@@ -500,9 +517,13 @@ export interface PosSaleResult {
   replayed: boolean
 }
 
-export async function createPosSale(input: PosSaleInput): Promise<PosSaleResult> {
-  const { data, error } = await getSupabaseClient().rpc('pos_create_sale', {
+/** No answer in this long counts as an interrupted connection. */
+const CHECKOUT_TIMEOUT_MS = 30_000
+
+export async function posCheckout(input: PosSaleInput): Promise<PosSaleResult> {
+  const { data, error } = await getSupabaseClient().rpc('pos_checkout', {
     p_items: input.items,
+    p_expected_prices: input.expectedPrices,
     p_payment_method: input.paymentMethod,
     p_payment_reference: input.paymentReference,
     p_discount_cents: input.discountCents,
@@ -512,9 +533,28 @@ export async function createPosSale(input: PosSaleInput): Promise<PosSaleResult>
     p_note: input.note,
     p_discount_approval_id: input.discountApprovalId,
     p_request_id: input.requestId,
-  })
+  }).abortSignal(AbortSignal.timeout(CHECKOUT_TIMEOUT_MS))
   if (error) throw error
   return data as unknown as PosSaleResult
+}
+
+/** Which prices on a bill are out of date. Changes nothing. */
+export async function checkPosPrices(items: PosItemInput[], expected: PosSaleInput['expectedPrices'], customerProfileId: string | null): Promise<PriceChange[]> {
+  const { data, error } = await getSupabaseClient().rpc('pos_check_prices', {
+    p_items: items,
+    p_expected_prices: expected,
+    p_customer_profile_id: customerProfileId,
+  })
+  if (error) throw error
+  return data as unknown as PriceChange[]
+}
+
+/** The bill saved under this request id, if the database has one. */
+export async function findSaleByRequest(requestId: string): Promise<PosSaleResult | null> {
+  const { data, error } = await getSupabaseClient()
+    .from('pos_sales').select('id, bill_number, total_cents').eq('request_id', requestId).maybeSingle()
+  if (error) throw error
+  return data ? { ...data, replayed: true } : null
 }
 
 // Discount policy and approval
@@ -692,6 +732,7 @@ export async function loadPosSale(saleId: string): Promise<PosSaleDetail> {
  * reads. Anything not in that shape falls back to the full PostgREST detail.
  */
 export function describeUnitError(err: unknown, fallback: string): string {
+  if (isConnectionError(err)) return 'The connection was interrupted. Check it and try again.'
   const message = typeof (err as { message?: unknown })?.message === 'string' ? (err as { message: string }).message : ''
   const match = message.match(/^([a-z_]+):\s*([\s\S]+)$/)
   if (match) {

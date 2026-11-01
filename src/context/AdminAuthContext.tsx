@@ -109,7 +109,10 @@ export function AdminAuthProvider({ children }: { children: React.ReactNode }) {
   const signOut = useCallback(async () => {
     if (!CONFIGURED) return
     const supabase = getSupabaseClient()
-    await supabase.auth.signOut()
+    const { error } = await supabase.auth.signOut()
+    // A failed server call leaves the session on the device. Someone who pressed
+    // sign out on a shared phone must not stay signed in, so end it here anyway.
+    if (error) await supabase.auth.signOut({ scope: 'local' })
     // onAuthStateChange fires SIGNED_OUT, which moves status to 'signed-out'.
   }, [])
 

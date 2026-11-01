@@ -223,6 +223,7 @@ export type Database = {
       }
       categories: {
         Row: {
+          allows_shared_barcode: boolean
           default_tracking_mode: string
           created_at: string
           hero_blurb: string | null
@@ -240,6 +241,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          allows_shared_barcode?: boolean
           default_tracking_mode?: string
           created_at?: string
           hero_blurb?: string | null
@@ -257,6 +259,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          allows_shared_barcode?: boolean
           default_tracking_mode?: string
           created_at?: string
           hero_blurb?: string | null
@@ -1440,6 +1443,72 @@ export type Database = {
             referencedColumns: ["id", "product_id"]
           },
         ]
+      }
+      barcode_registry: {
+        Row: {
+          created_at: string
+          kind: string
+          product_barcode_id: string | null
+          unit_id: string | null
+          value: string
+        }
+        Insert: {
+          created_at?: string
+          kind: string
+          product_barcode_id?: string | null
+          unit_id?: string | null
+          value: string
+        }
+        Update: {
+          created_at?: string
+          kind?: string
+          product_barcode_id?: string | null
+          unit_id?: string | null
+          value?: string
+        }
+        Relationships: []
+      }
+      product_barcodes: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          product_id: string
+          retire_note: string | null
+          retired_at: string | null
+          retired_by: string | null
+          source: string
+          status: string
+          value: string
+          variant_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          product_id: string
+          retire_note?: string | null
+          retired_at?: string | null
+          retired_by?: string | null
+          source: string
+          status?: string
+          value: string
+          variant_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          product_id?: string
+          retire_note?: string | null
+          retired_at?: string | null
+          retired_by?: string | null
+          source?: string
+          status?: string
+          value?: string
+          variant_id?: string | null
+        }
+        Relationships: []
       }
       product_prices: {
         Row: {
@@ -3244,6 +3313,9 @@ export type Database = {
         Args: { p_note: string; p_payment_id: string }
         Returns: Json
       }
+      admin_issue_product_barcode: { Args: { p_product_id: string; p_variant_id: string | null }; Returns: Json }
+      admin_register_manufacturer_barcode: { Args: { p_product_id: string; p_value: string; p_variant_id: string | null }; Returns: Json }
+      admin_retire_product_barcode: { Args: { p_barcode_id: string; p_note: string }; Returns: Json }
       admin_write_off_units: {
         Args: { p_note: string; p_reason: string; p_unit_ids: string[] }
         Returns: Json
@@ -3424,6 +3496,24 @@ export type Database = {
         Args: { p_phone: string }
         Returns: { profile_id: string; full_name: string | null; phone: string | null; tier_code: string }[]
       }
+      pos_check_prices: { Args: { p_customer_profile_id: string | null; p_expected_prices: Json; p_items: Json }; Returns: Json }
+      pos_checkout: {
+        Args: {
+          p_customer_name: string
+          p_customer_phone: string
+          p_customer_profile_id: string | null
+          p_discount_approval_id: string | null
+          p_discount_cents: number
+          p_expected_prices: Json
+          p_items: Json
+          p_note: string
+          p_payment_method: string
+          p_payment_reference: string
+          p_request_id: string
+        }
+        Returns: Json
+      }
+      pos_scan: { Args: { p_code: string; p_customer_profile_id: string | null }; Returns: Json }
       pos_lookup_unit: { Args: { p_code: string; p_customer_profile_id: string | null }; Returns: Json }
       pos_quote_product: { Args: { p_customer_profile_id: string | null; p_product_id: string; p_variant_id: string | null }; Returns: Json }
       pos_request_discount_approval: {
