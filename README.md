@@ -2,7 +2,9 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
-First, run the development server:
+First, start local Supabase with `npx supabase start`. `npm run dev` needs it, and starts Next.js and the local `send-sms` function together.
+
+Then run the development server:
 
 ```bash
 npm run dev

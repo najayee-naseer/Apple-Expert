@@ -3,7 +3,7 @@
   "version": "1.1.1",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "node scripts/dev-preflight.mjs && concurrently --names next,sms --prefix-colors blue,magenta --kill-others --passthrough-arguments \"next dev {@}\" \"npx supabase functions serve --env-file supabase/.env --no-verify-jwt\" --",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
@@ -34,6 +34,7 @@
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "concurrently": "^10.0.6",
     "eslint": "^9",
     "eslint-config-next": "16.3.4",
     "tailwindcss": "^4",

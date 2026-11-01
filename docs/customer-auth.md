@@ -125,9 +125,9 @@ same hook, configured in `supabase/config.toml` with a signing secret from
 
 1. Add `SMSLENZ_USER_ID`, `SMSLENZ_API_KEY` and `SMSLENZ_SENDER_ID` to `supabase/.env`.
    Without them the hook refuses and no code is sent.
-2. Run `npx supabase start`, then
-   `npx supabase functions serve --env-file supabase/.env --no-verify-jwt`.
-   The runtime started by `supabase start` alone does not load these secrets.
+2. Run `npx supabase start`, then `npm run dev`. That starts Next.js and `send-sms`
+   together, and stopping either stops both. The runtime started by `supabase start`
+   alone does not load these secrets.
 
 Real codes cost SMS credit. Local codes last 6000 seconds because the CLI fixes that
 value; production's is set in its dashboard. Never run `supabase config push` from
