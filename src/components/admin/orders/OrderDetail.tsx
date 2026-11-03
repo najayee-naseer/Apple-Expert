@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   X, LoaderCircle, AlertCircle, Check, Crown, User, Mail, Phone,
-  Package, History, CreditCard, MapPin, Lock, ShieldCheck,
+  Package, History, CreditCard, MapPin, Lock, ShieldCheck, StickyNote,
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import { VipBadge } from '@/components/account/VipBadge'
 import { CONDITION_LABEL, snapshotImageUrl } from '@/lib/catalog'
+import { formatE164 } from '@/lib/auth/phone'
 import type { ProductCondition } from '@/types'
 import { formatPrice } from '@/utils/formatPrice'
 import { centsToRupees } from '@/lib/admin/pricing'
@@ -20,6 +21,7 @@ import {
 import type { AdminRole } from '@/lib/admin/roles'
 import { describeUnitError } from '@/lib/admin/units'
 import { OrderUnits } from './OrderUnits'
+import { DeliveryInformation, OrderDeliveryNotes } from './DeliveryInformation'
 
 type Save =
   | { kind: 'idle' }
@@ -139,7 +141,7 @@ export function OrderDetail({
         className="absolute inset-0 bg-black/45 backdrop-blur-[2px]" />
 
       <div role="dialog" aria-modal="true" aria-label="Order detail"
-        className="relative flex h-full w-full max-w-2xl flex-col bg-background border-l border-mint/80 dark:border-border shadow-float">
+        className="relative safe-y flex h-full w-full max-w-2xl flex-col bg-background border-l border-mint/80 dark:border-border shadow-float">
 
         <header className="flex items-start gap-3 border-b border-mint/80 dark:border-border px-5 py-4 bg-glass backdrop-blur-xl">
           <div className="min-w-0 flex-1">
@@ -175,7 +177,13 @@ export function OrderDetail({
 
           {detail && (
             <>
-              <Section icon={User} title="Customer">
+              <Section icon={MapPin} title="Delivery Information"
+                note="Recorded when the order was placed. Later changes to the customer's saved addresses do not affect it.">
+                <DeliveryInformation shippingAddress={detail.order.shipping_address} />
+              </Section>
+
+              <Section icon={User} title="Customer Account"
+                note="Who placed the order. The recipient above can be someone else.">
                 <div className="space-y-1.5">
                   <p className="text-sm font-semibold text-foreground">
                     {detail.customer?.full_name || <span className="font-normal text-muted-foreground">No name on file</span>}
@@ -185,9 +193,9 @@ export function OrderDetail({
                       <Mail size={12} className="shrink-0" /> {detail.customer.email}
                     </p>
                   )}
-                  {detail.customer?.phone && (
+                  {(detail.accountPhone ?? detail.customer?.phone) && (
                     <p className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
-                      <Phone size={12} className="shrink-0" /> {detail.customer.phone}
+                      <Phone size={12} className="shrink-0" /> {detail.accountPhone ? formatE164(detail.accountPhone) : detail.customer?.phone}
                     </p>
                   )}
                   {/* The tier recorded on the order, i.e. what this order was priced at. */}
@@ -195,14 +203,11 @@ export function OrderDetail({
                     Customer type at purchase <TierBadge tier={detail.order.customer_type_at_purchase} />
                   </p>
                 </div>
-                {detail.order.shipping_address && (
-                  <div className="mt-3 flex items-start gap-2 rounded-xl border border-mint/70 dark:border-border bg-card px-3 py-2.5">
-                    <MapPin size={13} className="mt-0.5 shrink-0 text-muted-foreground" />
-                    <pre className="min-w-0 flex-1 whitespace-pre-wrap break-words font-sans text-[12px] text-muted-foreground">
-                      {JSON.stringify(detail.order.shipping_address, null, 2)}
-                    </pre>
-                  </div>
-                )}
+              </Section>
+
+              <Section icon={StickyNote} title="Internal Delivery Notes"
+                note="Staff only. Customers never see these.">
+                <OrderDeliveryNotes orderId={detail.order.id} canAdd={canManage} />
               </Section>
 
               <Section icon={Package} title="Items"

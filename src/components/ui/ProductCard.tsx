@@ -3,6 +3,7 @@ import { formatPrice } from '@/utils/formatPrice'
 
 import React, { useState, useCallback } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { motion } from 'framer-motion'
 import { Product } from '@/types'
 import { Button } from './Button'
@@ -33,6 +34,7 @@ function resolveHref(product: Product): string {
 }
 
 export function ProductCard({ product, featured = false }: ProductCardProps) {
+  const router = useRouter()
   const { addToCart } = useCart()
   const { isWishlisted, toggleWishlist } = useWishlist()
   const [imgError, setImgError] = useState(false)
@@ -78,12 +80,10 @@ export function ProductCard({ product, featured = false }: ProductCardProps) {
     e.preventDefault()
     e.stopPropagation()
 
-    if (isPartSelector) {
-      window.location.href = href
-      return
-    }
-    if (needsChoice) {
-      window.location.href = href
+    // Same client-side navigation as the card's Link. Under Capacitor a page load
+    // of a path with no "." gets index.html, the home page, so never set location.
+    if (isPartSelector || needsChoice) {
+      router.push(href)
       return
     }
     addToCart(product)

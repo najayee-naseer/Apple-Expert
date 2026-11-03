@@ -192,7 +192,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             onClick={() => setDrawerOpen(false)}
             className="absolute inset-0 bg-black/45 backdrop-blur-[2px]"
           />
-          <div className="relative w-[272px] max-w-[82vw] h-full bg-surface border-r border-mint/80 dark:border-border shadow-float flex flex-col">
+          <div className="relative safe-y w-[272px] max-w-[82vw] h-full bg-surface border-r border-mint/80 dark:border-border shadow-float flex flex-col">
             <div className="flex items-center justify-between px-4 py-4 border-b border-mint/70 dark:border-border">
               <BrandMark />
               <button
@@ -216,7 +216,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 
       {/* ---------- Main column ---------- */}
       <div className="lg:pl-[260px] flex min-h-screen flex-col">
-        <header className="sticky top-0 z-20 border-b border-mint/80 dark:border-border bg-glass backdrop-blur-xl">
+        <header className="sticky top-0 z-20 pt-[var(--safe-top)] border-b border-mint/80 dark:border-border bg-glass backdrop-blur-xl">
           <div className="flex items-center gap-3 px-4 sm:px-6 h-16">
             <button
               type="button"

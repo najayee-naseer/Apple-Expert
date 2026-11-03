@@ -42,44 +42,59 @@ export type Database = {
       addresses: {
         Row: {
           city: string
+          country_code: string
           created_at: string
+          delivery_instructions: string | null
           district: string | null
           id: string
           is_default: boolean
           label: string | null
+          landmark: string | null
           line1: string
           line2: string | null
           phone: string | null
           postal_code: string | null
           profile_id: string
+          province: string | null
+          recipient_name: string | null
           updated_at: string
         }
         Insert: {
           city: string
+          country_code?: string
           created_at?: string
+          delivery_instructions?: string | null
           district?: string | null
           id?: string
           is_default?: boolean
           label?: string | null
+          landmark?: string | null
           line1: string
           line2?: string | null
           phone?: string | null
           postal_code?: string | null
           profile_id: string
+          province?: string | null
+          recipient_name?: string | null
           updated_at?: string
         }
         Update: {
           city?: string
+          country_code?: string
           created_at?: string
+          delivery_instructions?: string | null
           district?: string | null
           id?: string
           is_default?: boolean
           label?: string | null
+          landmark?: string | null
           line1?: string
           line2?: string | null
           phone?: string | null
           postal_code?: string | null
           profile_id?: string
+          province?: string | null
+          recipient_name?: string | null
           updated_at?: string
         }
         Relationships: [
@@ -316,6 +331,27 @@ export type Database = {
           label?: string
           sort_order?: number
           updated_at?: string
+        }
+        Relationships: []
+      }
+      delivery_regions: {
+        Row: {
+          country_code: string
+          country_name: string
+          district: string
+          province: string
+        }
+        Insert: {
+          country_code: string
+          country_name: string
+          district: string
+          province: string
+        }
+        Update: {
+          country_code?: string
+          country_name?: string
+          district?: string
+          province?: string
         }
         Relationships: []
       }
@@ -794,6 +830,45 @@ export type Database = {
             columns: ["supplier_return_id"]
             isOneToOne: false
             referencedRelation: "supplier_returns"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      order_delivery_notes: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          note: string
+          order_id: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          note: string
+          order_id: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          note?: string
+          order_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "order_delivery_notes_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_delivery_notes_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
             referencedColumns: ["id"]
           },
         ]
@@ -3477,6 +3552,29 @@ export type Database = {
       }
       expire_pending_orders: { Args: { p_limit?: number }; Returns: Json }
       place_order_v2: { Args: { p_lines: Json; p_notes: string | null; p_request_id: string }; Returns: Json }
+      admin_order_account_phone: { Args: { p_order_id: string }; Returns: string | null }
+      place_order_v3: { Args: { p_address_id: string; p_lines: Json; p_notes: string | null; p_request_id: string }; Returns: Json }
+      save_address: {
+        Args: {
+          p_city: string
+          p_country_code?: string
+          p_delivery_instructions: string
+          p_district: string
+          p_id: string | null
+          p_label: string
+          p_landmark: string
+          p_line1: string
+          p_line2: string
+          p_make_default: boolean
+          p_phone: string
+          p_postal_code: string
+          p_province: string
+          p_recipient_name: string
+        }
+        Returns: string
+      }
+      set_default_address: { Args: { p_id: string }; Returns: undefined }
+      delete_address: { Args: { p_id: string }; Returns: undefined }
       pos_create_sale: {
         Args: {
           p_customer_name: string

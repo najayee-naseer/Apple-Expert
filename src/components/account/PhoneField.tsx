@@ -12,6 +12,7 @@ import { COUNTRIES, findCountry } from '@/lib/auth/phone'
  */
 export function PhoneField({
   iso, onIsoChange, national, onNationalChange, disabled = false, autoFocus = false,
+  label = 'Phone number', hint, invalid = false, describedBy,
 }: {
   iso: string
   onIsoChange: (iso: string) => void
@@ -19,6 +20,12 @@ export function PhoneField({
   onNationalChange: (national: string) => void
   disabled?: boolean
   autoFocus?: boolean
+  label?: string
+  /** Replaces the line about the sign-in code, for numbers that receive no code. */
+  hint?: string
+  invalid?: boolean
+  /** The id of an error message shown below the field, so it is read with it. */
+  describedBy?: string
 }) {
   const id = useId()
   const country = findCountry(iso)
@@ -26,7 +33,7 @@ export function PhoneField({
   return (
     <div>
       <label htmlFor={id} className="mb-1.5 block text-[13px] font-semibold text-foreground">
-        Phone number
+        {label}
       </label>
 
       <div className="flex gap-2">
@@ -57,6 +64,8 @@ export function PhoneField({
             inputMode="tel"
             autoComplete="tel-national"
             autoFocus={autoFocus}
+            aria-invalid={invalid}
+            aria-describedby={describedBy}
             value={national}
             onChange={(e) => onNationalChange(e.target.value)}
             disabled={disabled}
@@ -67,7 +76,7 @@ export function PhoneField({
       </div>
 
       <p className="mt-1.5 text-[12px] text-muted-foreground">
-        {country.name} · we will text you a {'6'}-digit code.
+        {hint ?? <>{country.name} · we will text you a {'6'}-digit code.</>}
       </p>
     </div>
   )

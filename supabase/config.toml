@@ -255,9 +255,9 @@ otp_expiry = 3600
 
 [auth.sms]
 # Allow/disallow new user signups via SMS to your project.
-enable_signup = false
+enable_signup = true
 # If enabled, users need to confirm their phone number before signing in.
-enable_confirmations = false
+enable_confirmations = true
 # Template for sending OTP to users
 template = "Your code is {{ .Code }}"
 # Controls the minimum amount of time that must pass before sending another sms otp.
@@ -284,11 +284,21 @@ max_frequency = "5s"
 # enabled = true
 # uri = "pg-functions://<database>/<schema>/<hook_name>"
 
+# LOCAL ONLY. SMS codes are delivered by supabase/functions/send-sms, with a signing
+# secret from the git-ignored supabase/.env. Never run `supabase config push` from
+# this file: it would send production's hook to host.docker.internal.
+[auth.hook.send_sms]
+enabled = true
+uri = "http://host.docker.internal:55321/functions/v1/send-sms"
+secrets = "env(SEND_SMS_HOOK_SECRET)"
+
 # Configure one of the supported SMS providers: `twilio`, `twilio_verify`, `messagebird`, `textlocal`, `vonage`.
+# LOCAL ONLY. Not a real Twilio account. The CLI turns the phone provider on only when
+# a provider block is enabled, and the hook above does the sending instead.
 [auth.sms.twilio]
-enabled = false
-account_sid = ""
-message_service_sid = ""
+enabled = true
+account_sid = "unused-send-sms-hook-delivers"
+message_service_sid = "unused-send-sms-hook-delivers"
 # DO NOT commit your Twilio auth token to git. Use environment variable substitution instead:
 auth_token = "env(SUPABASE_AUTH_SMS_TWILIO_AUTH_TOKEN)"
 

@@ -28,6 +28,8 @@ trap 'rm -rf "$WORK"; cleanup' EXIT
 ADMIN=61111111-1111-1111-1111-111111111111
 C1=62222222-2222-2222-2222-222222222222
 C2=63333333-3333-3333-3333-333333333333
+# Every order needs a delivery address; the fixture block gives each customer one.
+ADDR="(select id from public.addresses where profile_id = auth.uid() limit 1)"
 
 as_postgres() { docker exec -i "$CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 -qAt "$@"; }
 as_api()      { docker exec -i "$CONTAINER" psql -h 127.0.0.1 -U authenticator -d postgres -qAt "$@"; }
@@ -55,6 +57,9 @@ insert into auth.users (id, instance_id, aud, role, email, encrypted_password, e
 select u.id::uuid, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', u.email, '', now(), now(), now(), '{}', '{}', false
 from (values ('$ADMIN', 'cc-admin@test.local'), ('$C1', 'cc-c1@test.local'), ('$C2', 'cc-c2@test.local')) as u(id, email);
 insert into public.user_roles (profile_id, role) values ('$ADMIN', 'admin');
+insert into public.addresses (profile_id, recipient_name, phone, province, district, city, line1, is_default)
+select c.id::uuid, 'Test Recipient', '+94771234567', 'Western Province', 'Colombo', 'Colombo', '1 Test Street', true
+from (values ('$C1'), ('$C2')) as c(id);
 insert into public.products (id, name, category_id, subcategory, stock, is_active, tracking_mode)
 select p.id, p.id, (select id from public.categories where slug = 'accessories'), 'Other Accessories', p.stock, true, p.mode
 from (values ('cc-last', 1, 'quantity'), ('cc-a', 15, 'quantity'), ('cc-b', 15, 'quantity'), ('cc-unit', 0, 'unit'), ('cc-armed', 0, 'quantity')) as p(id, stock, mode);
@@ -67,8 +72,8 @@ available() { as_postgres -c "select available from public.catalog_availability(
 
 # R1 -------------------------------------------------------------------------
 LAST='[{"product_id":"cc-last","quantity":1}]'
-session "$C1" "public.place_order('$LAST'::jsonb)" | as_api > "$WORK/r1a" 2>&1 &
-session "$C2" "public.place_order('$LAST'::jsonb)" | as_api > "$WORK/r1b" 2>&1 &
+session "$C1" "public.place_order_v3('$LAST'::jsonb, $ADDR, null, gen_random_uuid())" | as_api > "$WORK/r1a" 2>&1 &
+session "$C2" "public.place_order_v3('$LAST'::jsonb, $ADDR, null, gen_random_uuid())" | as_api > "$WORK/r1b" 2>&1 &
 wait
 [ "$(grep -l 'order_number' "$WORK/r1a" "$WORK/r1b" | wc -l | tr -d ' ')" = 1 ] || fail "R1 expected exactly one order: $(cat "$WORK/r1a" "$WORK/r1b")"
 grep -q 'insufficient_stock' "$WORK/r1a" "$WORK/r1b" || fail "R1 expected insufficient_stock"
@@ -79,7 +84,7 @@ echo "R1 ok - the last unit went to exactly one order"
 as_postgres -c "update public.orders set status = 'cancelled' where profile_id in ('$C1', '$C2')" >/dev/null
 [ "$(available cc-last)" = 1 ] || fail "R2 setup"
 SALE="public.pos_create_sale('[{\"product_id\":\"cc-last\",\"quantity\":1}]'::jsonb, 'cash', null, 0, null, null, null, null, null, gen_random_uuid())"
-session "$C1" "public.place_order('$LAST'::jsonb)" | as_api > "$WORK/r2a" 2>&1 &
+session "$C1" "public.place_order_v3('$LAST'::jsonb, $ADDR, null, gen_random_uuid())" | as_api > "$WORK/r2a" 2>&1 &
 session "$ADMIN" "$SALE" | as_api > "$WORK/r2b" 2>&1 &
 wait
 WON=0; grep -q 'order_number' "$WORK/r2a" && WON=$((WON + 1)); grep -q 'bill_number' "$WORK/r2b" && WON=$((WON + 1))
@@ -88,7 +93,7 @@ echo "R2 ok - counter and online cannot both sell the last one"
 
 # R3 -------------------------------------------------------------------------
 RID="$(uuidgen | tr 'A-Z' 'a-z')"
-SAME="public.place_order_v2('[{\"product_id\":\"cc-a\",\"quantity\":1}]'::jsonb, null, '$RID'::uuid)"
+SAME="public.place_order_v3('[{\"product_id\":\"cc-a\",\"quantity\":1}]'::jsonb, $ADDR, null, '$RID'::uuid)"
 session "$C1" "$SAME" | as_api > "$WORK/r3a" 2>&1 &
 session "$C1" "$SAME" | as_api > "$WORK/r3b" 2>&1 &
 wait
@@ -99,8 +104,8 @@ echo "R3 ok - one order, one replay"
 # R4 -------------------------------------------------------------------------
 as_postgres -c "update public.orders set status = 'cancelled' where profile_id in ('$C1', '$C2') and status <> 'cancelled'" >/dev/null
 for i in $(seq 1 10); do
-  session "$C1" "public.place_order('[{\"product_id\":\"cc-a\",\"quantity\":1},{\"product_id\":\"cc-b\",\"quantity\":1}]'::jsonb)" | as_api > "$WORK/r4a$i" 2>&1 &
-  session "$C2" "public.place_order('[{\"product_id\":\"cc-b\",\"quantity\":1},{\"product_id\":\"cc-a\",\"quantity\":1}]'::jsonb)" | as_api > "$WORK/r4b$i" 2>&1 &
+  session "$C1" "public.place_order_v3('[{\"product_id\":\"cc-a\",\"quantity\":1},{\"product_id\":\"cc-b\",\"quantity\":1}]'::jsonb, $ADDR, null, gen_random_uuid())" | as_api > "$WORK/r4a$i" 2>&1 &
+  session "$C2" "public.place_order_v3('[{\"product_id\":\"cc-b\",\"quantity\":1},{\"product_id\":\"cc-a\",\"quantity\":1}]'::jsonb, $ADDR, null, gen_random_uuid())" | as_api > "$WORK/r4b$i" 2>&1 &
 done
 wait
 ! grep -l 'deadlock' "$WORK"/r4* >/dev/null 2>&1 || fail "R4 deadlock: $(grep -h deadlock "$WORK"/r4* | head -1)"
@@ -114,7 +119,7 @@ LINE='[{"product_id":"cc-unit","received_quantity":25,"unit_cost_cents":100}]'
 session "$ADMIN" "public.admin_receive_goods('opening', null, null, null, null, false, null, current_date, null, '$LINE'::jsonb, gen_random_uuid())" | as_api > "$WORK/r5g1" 2>&1 &
 session "$ADMIN" "public.admin_receive_goods('opening', null, null, null, null, false, null, current_date, null, '$LINE'::jsonb, gen_random_uuid())" | as_api > "$WORK/r5g2" 2>&1 &
 for i in $(seq 1 5); do
-  session "$C1" "public.place_order('[{\"product_id\":\"cc-unit\",\"quantity\":1}]'::jsonb)" | as_api > "$WORK/r5o$i" 2>&1 &
+  session "$C1" "public.place_order_v3('[{\"product_id\":\"cc-unit\",\"quantity\":1}]'::jsonb, $ADDR, null, gen_random_uuid())" | as_api > "$WORK/r5o$i" 2>&1 &
 done
 wait
 ! grep -l 'deadlock' "$WORK"/r5* >/dev/null 2>&1 || fail "R5 deadlock"
@@ -165,14 +170,14 @@ as_postgres -c "insert into public.order_items (order_id, product_id, product_na
 api "$ADMIN" "(select 1) ; update public.orders set status = 'shipped' where id = '$LEGACY'" >/dev/null
 expect_stock 7 "pre-rollout shipment"
 
-ORDER="$(api "$C1" "public.place_order('[{\"product_id\":\"cc-armed\",\"quantity\":1}]'::jsonb) ->> 'id'" | head -1)"
+ORDER="$(api "$C1" "public.place_order_v3('[{\"product_id\":\"cc-armed\",\"quantity\":1}]'::jsonb, $ADDR, null, gen_random_uuid()) ->> 'id'" | head -1)"
 expect_stock 7 "an order holds, the number stays"
 api "$ADMIN" "(select 1) ; update public.orders set status = 'shipped' where id = '$ORDER'" >/dev/null
 expect_stock 6 "first shipment"
 api "$ADMIN" "(select 1) ; update public.orders set status = 'cancelled' where id = '$ORDER'" >/dev/null
 expect_stock 6 "cancel after shipping restores nothing"
 
-ORDER="$(api "$C1" "public.place_order('[{\"product_id\":\"cc-armed\",\"quantity\":1}]'::jsonb) ->> 'id'" | head -1)"
+ORDER="$(api "$C1" "public.place_order_v3('[{\"product_id\":\"cc-armed\",\"quantity\":1}]'::jsonb, $ADDR, null, gen_random_uuid()) ->> 'id'" | head -1)"
 as_postgres -c "update public.orders set reservation_expires_at = now() - interval '1 minute' where id = '$ORDER'; update public.stock_reservations set expires_at = now() - interval '1 minute' where order_id = '$ORDER'" >/dev/null
 api "$ADMIN" "public.expire_pending_orders(50)" >/dev/null
 [ "$(as_postgres -c "select stock_state from public.orders where id = '$ORDER'")" = expired ] || fail "A expiry"

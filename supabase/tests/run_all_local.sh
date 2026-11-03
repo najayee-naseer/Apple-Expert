@@ -50,6 +50,7 @@ declare -a SUITES=(
   "verify_inventory_master.sql|ALL INVENTORY MASTER CHECKS PASSED"
   "verify_dual_barcodes.sql|ALL DUAL BARCODE CHECKS PASSED"
   "verify_pos_checkout.sql|ALL POS CHECKOUT CHECKS PASSED"
+  "verify_delivery_addresses.sql|ALL DELIVERY ADDRESS CHECKS PASSED"
 )
 
 FAILED=0
@@ -57,7 +58,8 @@ for entry in "${SUITES[@]}"; do
   suite="${entry%%|*}"
   marker="${entry##*|}"
   log="$OUT/${suite%.sql}.log"
-  psql_pg < "$HERE/$suite" > "$log" 2>&1
+  # Suites are piped into the container, so the shared order helper goes first.
+  cat "$HERE/_place_order_with_address.sql" "$HERE/$suite" | psql_pg > "$log" 2>&1
   code=$?
   # After every suite, so a failed run cannot leave fixtures for the next one.
   psql_pg < "$HERE/verify_inventory_ledger_authenticator_cleanup.sql" > /dev/null 2>&1

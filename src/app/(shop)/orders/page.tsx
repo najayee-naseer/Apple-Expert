@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { AlertCircle, LoaderCircle, Package, RotateCw, ShieldCheck } from 'lucide-react'
+import { AlertCircle, ChevronDown, LoaderCircle, MapPin, Package, RotateCw, ShieldCheck } from 'lucide-react'
 import { Header } from '@/components/ui/Header'
 import { Button } from '@/components/ui/Button'
 import { VipBadge } from '@/components/account/VipBadge'
+import { DeliverySnapshotLines } from '@/components/account/AddressCard'
+import { deliveryPlace, type DeliverySnapshot } from '@/lib/customer/addresses'
 import { listMyOrders, type MyOrder } from '@/lib/customer/orders'
 import { centsToRupees, CONDITION_LABEL } from '@/lib/catalog'
 import { formatPrice } from '@/utils/formatPrice'
@@ -26,6 +28,36 @@ const STATUS_LABEL: Record<string, string> = {
 
 function rupees(cents: number): string {
   return formatPrice(centsToRupees(cents))
+}
+
+/** The order's own copy of the address, never whatever is saved in the account today. */
+function OrderDelivery({ delivery }: { delivery: DeliverySnapshot | null }) {
+  const [open, setOpen] = useState(false)
+
+  if (!delivery) {
+    return (
+      <p className="mb-3 flex items-center gap-1.5 text-[12px] text-muted-foreground">
+        <MapPin size={13} className="shrink-0" /> No delivery address was recorded for this order.
+      </p>
+    )
+  }
+
+  return (
+    <div className="mb-3">
+      <button type="button" aria-expanded={open} onClick={() => setOpen((v) => !v)}
+        className="focus-ring -mx-1 flex min-h-11 w-[calc(100%+0.5rem)] items-center gap-1.5 rounded-xl px-1 text-left text-[12.5px] text-muted-foreground hover:bg-primary-soft/60">
+        <MapPin size={13} className="shrink-0 text-primary" />
+        <span className="min-w-0 flex-1 truncate">Delivering to <span className="font-semibold text-foreground">{deliveryPlace(delivery)}</span></span>
+        <span className="shrink-0 font-semibold text-primary">{open ? 'Hide' : 'View address'}</span>
+        <ChevronDown size={14} className={`shrink-0 text-primary transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="mt-1.5 rounded-xl bg-muted/60 px-3 py-2.5">
+          <DeliverySnapshotLines snapshot={delivery} />
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function OrdersPage() {
@@ -95,6 +127,8 @@ export default function OrdersPage() {
                   ? <VipBadge size="sm" label="Wholesale VIP" />
                   : <span className="font-semibold text-foreground">Retail</span>}
               </p>
+
+              <OrderDelivery delivery={order.delivery} />
 
               <ul className="divide-y divide-mint/70 dark:divide-border">
                 {order.lines.map((line) => (

@@ -14,8 +14,9 @@ import type { AdminRole } from './roles'
  *                                              from any browser session
  *   order_events    staff all                - status history is recorded here
  *   payments        admin read only          - no client write path exists
+ *   order_delivery_notes  staff read / insert - append-only, no customer policy
  *
- * No schema change, no new RPC, no service-role key.
+ * No service-role key.
  */
 
 type Tables = Database['public']['Tables']
@@ -133,6 +134,8 @@ export interface AdminOrderDetail {
   events: OrderEventRow[]
   payments: PaymentRow[]
   customer: { full_name: string | null; email: string | null; phone: string | null } | null
+  /** The number the customer signed in with, which profiles.phone may not hold. */
+  accountPhone: string | null
 }
 
 /**
@@ -149,7 +152,7 @@ export async function loadOrderDetail(
 ): Promise<AdminOrderDetail> {
   const supabase = getSupabaseClient()
 
-  const [orderResult, itemsResult, eventsResult, paymentsResult] = await Promise.all([
+  const [orderResult, itemsResult, eventsResult, paymentsResult, accountPhoneResult] = await Promise.all([
     supabase.from('orders').select('*, profiles(full_name, email, phone)').eq('id', orderId).single(),
     supabase.from('order_items').select('*').eq('order_id', orderId).order('created_at', { ascending: true }),
     supabase.from('order_events').select('*').eq('order_id', orderId).order('created_at', { ascending: false }),
@@ -157,6 +160,7 @@ export async function loadOrderDetail(
     includePayments
       ? supabase.from('payments').select('*').eq('order_id', orderId).order('created_at', { ascending: false })
       : Promise.resolve({ data: [] as PaymentRow[], error: null }),
+    supabase.rpc('admin_order_account_phone', { p_order_id: orderId }),
   ])
 
   if (orderResult.error) throw orderResult.error
@@ -174,6 +178,8 @@ export async function loadOrderDetail(
     events: eventsResult.data ?? [],
     payments: paymentsResult.data ?? [],
     customer: profiles ?? null,
+    // Not worth failing the whole order over: the profile's number is the fallback.
+    accountPhone: accountPhoneResult.data ?? null,
   }
 }
 
@@ -218,6 +224,34 @@ export async function updateOrderStatus(
     eventRecorded: !eventError,
     eventError: eventError ? eventError.message : null,
   }
+}
+
+export interface OrderDeliveryNote {
+  id: string
+  note: string
+  createdAt: string
+  authorName: string | null
+}
+
+export async function listOrderDeliveryNotes(orderId: string): Promise<OrderDeliveryNote[]> {
+  const { data, error } = await getSupabaseClient()
+    .from('order_delivery_notes')
+    .select('id, note, created_at, profiles(full_name)')
+    .eq('order_id', orderId)
+    .order('created_at', { ascending: false })
+  if (error) throw error
+  return (data ?? []).map((row) => ({
+    id: row.id,
+    note: row.note,
+    createdAt: row.created_at,
+    authorName: row.profiles?.full_name ?? null,
+  }))
+}
+
+/** The author is recorded by the column default, and the policy refuses any other. */
+export async function addOrderDeliveryNote(orderId: string, note: string): Promise<void> {
+  const { error } = await getSupabaseClient().from('order_delivery_notes').insert({ order_id: orderId, note })
+  if (error) throw error
 }
 
 /** Staff-facing meaning of orders.stock_state. */

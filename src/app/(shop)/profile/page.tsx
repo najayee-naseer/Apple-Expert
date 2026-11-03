@@ -16,7 +16,7 @@ import { openAdminLogin } from '@/lib/admin/entry'
 import { listOwnRequests, openRequest, latestDecision, type RequestStatus } from '@/lib/customer/wholesale'
 import {
   Moon, Sun, ChevronRight, Package, CreditCard, Settings, HelpCircle, LogOut, Heart,
-  LogIn, Store, Repeat, FlaskConical, Briefcase,
+  LogIn, Store, Repeat, FlaskConical, Briefcase, MapPin,
 } from 'lucide-react'
 
 export default function ProfilePage() {
@@ -76,6 +76,10 @@ export default function ProfilePage() {
   const menuItems = [
     { icon: Package, label: 'My Orders', description: 'View and track your orders', chip: CHIP, href: '/orders' },
     { icon: Heart, label: 'Wishlist', description: `${wishlist.length} saved item${wishlist.length === 1 ? '' : 's'}`, chip: CHIP, href: '/wishlist' },
+    // An address book belongs to a signed-in account; guests have none to open.
+    ...(hasSession
+      ? [{ icon: MapPin, label: 'Saved Addresses', description: 'Delivery addresses for your orders', chip: CHIP, href: '/account/addresses' }]
+      : []),
     { icon: CreditCard, label: 'Payment Methods', description: 'Manage your saved cards', chip: CHIP },
     { icon: Settings, label: 'Account Settings', description: 'Personal details and security', chip: CHIP },
     { icon: HelpCircle, label: 'Help & Support', description: 'FAQ and contact information', chip: CHIP },

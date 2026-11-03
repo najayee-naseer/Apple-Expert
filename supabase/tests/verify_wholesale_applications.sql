@@ -317,7 +317,7 @@ begin
 
   -- WA18 - a non-approved applicant is charged retail by place_order() --------
   perform pg_temp.as_user('e3333333-3333-3333-3333-333333333333');
-  v_result := public.place_order('[{"product_id":"iphone-17-pro-max","variant_key":"v1","quantity":1}]'::jsonb);
+  v_result := pg_temp.place_order('[{"product_id":"iphone-17-pro-max","variant_key":"v1","quantity":1}]'::jsonb);
   perform pg_temp.as_postgres();
   select * into v_item from public.order_items where order_id = (v_result ->> 'id')::uuid;
   if v_item.tier_code_snapshot <> 'retail' or v_item.unit_price_cents <> v_retail then
@@ -368,7 +368,7 @@ begin
     raise exception 'WA21/22 FAILED - existing VIP: tier %, % rows, effective %', a.tier, a.vip_rows, a.effective;
   end if;
   perform pg_temp.as_user('e7777777-7777-7777-7777-777777777777');
-  v_result := public.place_order('[{"product_id":"iphone-17-pro-max","variant_key":"v1","quantity":1}]'::jsonb);
+  v_result := pg_temp.place_order('[{"product_id":"iphone-17-pro-max","variant_key":"v1","quantity":1}]'::jsonb);
   v_err := null;
   begin perform public.customer_save_wholesale_application(pg_temp.fields('Dup'), 'submit');
   exception when others then v_err := sqlerrm; end;

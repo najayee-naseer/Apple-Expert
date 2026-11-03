@@ -89,6 +89,26 @@ commit;
 begin;
 set local role authenticated;
 
+-- Temp functions end with the session, so the shared order helper is redefined here.
+create function pg_temp.fixture_address() returns uuid language plpgsql as $$
+declare
+  v_id uuid;
+begin
+  select id into v_id from public.addresses where profile_id = auth.uid() order by is_default desc limit 1;
+  if v_id is null then
+    v_id := public.save_address(null, 'Test', 'Test Recipient', '+94771234567', 'Western Province', 'Colombo',
+                                'Colombo', '1 Test Street', null, null, null, null, true);
+  end if;
+  return v_id;
+end;
+$$;
+create function pg_temp.place_order(p_lines jsonb, p_notes text default null) returns jsonb language sql as $$
+  select public.place_order_v3(p_lines, pg_temp.fixture_address(), p_notes, gen_random_uuid())
+$$;
+create function pg_temp.place_order_v2(p_lines jsonb, p_notes text, p_request_id uuid) returns jsonb language sql as $$
+  select public.place_order_v3(p_lines, pg_temp.fixture_address(), p_notes, p_request_id)
+$$;
+
 create function pg_temp.as_user(p_uid text) returns void language sql as $$
   select set_config('request.jwt.claims', json_build_object('sub', p_uid, 'role', 'authenticated')::text, true)
 $$;
@@ -256,15 +276,15 @@ begin
   if v_n <> 0 then raise exception 'G6 FAILED - a customer can read % inventory units', v_n; end if;
 
   v_req := gen_random_uuid();
-  v_order := public.place_order_v2(jsonb_build_array(jsonb_build_object('product_id', 'gt-phone', 'variant_key', 'v1', 'quantity', 2)), 'gt-fixture', v_req);
+  v_order := pg_temp.place_order_v2(jsonb_build_array(jsonb_build_object('product_id', 'gt-phone', 'variant_key', 'v1', 'quantity', 2)), 'gt-fixture', v_req);
   v_order_id := (v_order ->> 'id')::uuid;
 
   -- Same request, same content: the first order. Different content: refused.
-  if (public.place_order_v2(jsonb_build_array(jsonb_build_object('product_id', 'gt-phone', 'variant_key', 'v1', 'quantity', 2)), 'gt-fixture', v_req) ->> 'id')::uuid <> v_order_id then
+  if (pg_temp.place_order_v2(jsonb_build_array(jsonb_build_object('product_id', 'gt-phone', 'variant_key', 'v1', 'quantity', 2)), 'gt-fixture', v_req) ->> 'id')::uuid <> v_order_id then
     raise exception 'G6 FAILED - order replay created a second order';
   end if;
   perform pg_temp.expect_fail('G6a request id with other content',
-    format('select public.place_order_v2(%L::jsonb, null, %L::uuid)',
+    format('select pg_temp.place_order_v2(%L::jsonb, null, %L::uuid)',
            jsonb_build_array(jsonb_build_object('product_id', 'gt-phone', 'variant_key', 'v1', 'quantity', 1)), v_req),
     'request_id_reused:%');
 
@@ -284,7 +304,7 @@ begin
   -- G7 variant without enough units --------------------------------------------
   perform pg_temp.as_user(c_customer);
   perform pg_temp.expect_fail('G7 variant B over units',
-    $q$select public.place_order('[{"product_id":"gt-phone","variant_key":"v2","quantity":3}]'::jsonb, 'gt-fixture')$q$,
+    $q$select pg_temp.place_order('[{"product_id":"gt-phone","variant_key":"v2","quantity":3}]'::jsonb, 'gt-fixture')$q$,
     'insufficient_stock:%');
   if (select available from public.catalog_availability() a where a.product_id = 'gt-phone' and a.legacy_key = 'v2') <> 2
      or (select available from public.catalog_availability() a where a.product_id = 'gt-phone' and a.legacy_key = 'v1') <> 2 then
@@ -342,7 +362,7 @@ begin
 
   -- A unit held by an online order cannot be sold at the counter.
   perform pg_temp.as_user(c_customer);
-  v_order := public.place_order('[{"product_id":"gt-phone","variant_key":"v1","quantity":1}]'::jsonb, 'gt-fixture');
+  v_order := pg_temp.place_order('[{"product_id":"gt-phone","variant_key":"v1","quantity":1}]'::jsonb, 'gt-fixture');
   perform pg_temp.as_user(c_staff);
   select barcode into v_reserved from public.inventory_units where order_id = (v_order ->> 'id')::uuid limit 1;
   perform pg_temp.expect_fail('G9a reserved unit',
@@ -435,7 +455,7 @@ begin
 
   -- G11 quantity item works as a number, with holds ---------------------------------
   perform pg_temp.as_user(c_customer);
-  v_order := public.place_order('[{"product_id":"gt-legacy","quantity":2}]'::jsonb, 'gt-fixture');
+  v_order := pg_temp.place_order('[{"product_id":"gt-legacy","quantity":2}]'::jsonb, 'gt-fixture');
   perform pg_temp.as_user(c_staff);
   if pg_temp.stock_of('gt-legacy') <> 5
      or (select available from public.catalog_availability() a where a.product_id = 'gt-legacy' and a.variant_id is null) <> 3 then

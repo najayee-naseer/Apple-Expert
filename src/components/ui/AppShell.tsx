@@ -12,12 +12,27 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // the space reserved for it.
   const isEntryScreen =
     (pathname?.startsWith('/onboarding') ?? false) || (pathname?.startsWith('/welcome') ?? false)
+  // Onboarding paints its gradient behind the status bar and insets its own top
+  // bar, so the shell must not add the safe area a second time.
+  const insetsOwnTop = pathname?.startsWith('/onboarding') ?? false
 
   return (
     <div
       className="flex flex-col min-h-screen bg-background w-full max-w-[480px] mx-auto sm:border-x sm:border-border sm:shadow-float sm:my-0 relative overflow-hidden"
-      style={isEntryScreen ? undefined : { paddingBottom: 'var(--nav-safe-pad)' }}
+      style={{
+        paddingTop: insetsOwnTop ? undefined : 'var(--safe-top)',
+        paddingBottom: isEntryScreen ? undefined : 'var(--nav-safe-pad)',
+      }}
     >
+      {/* Keeps the status bar readable once the page scrolls beneath it. Zero
+          height where there is no inset. Under z-50 so modal backdrops dim it. */}
+      {!insetsOwnTop && (
+        <div
+          aria-hidden
+          className="fixed inset-x-0 top-0 z-[45] bg-glass"
+          style={{ height: 'var(--safe-top)' }}
+        />
+      )}
       {/* Light mode is a pure white canvas — green is an accent, never a page
           wash. The atmospheric orbs stay in dark mode, where they give the dark
           theme its depth. */}

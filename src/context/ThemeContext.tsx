@@ -1,6 +1,7 @@
 "use client"
 
 import React, { createContext, useContext, useEffect, useState } from 'react'
+import { Capacitor, SystemBars, SystemBarsStyle } from '@capacitor/core'
 
 type Theme = 'light' | 'dark'
 
@@ -28,6 +29,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       document.documentElement.classList.add('dark')
     }
   }, [])
+
+  // The app draws behind the status bar and its theme can differ from the
+  // device's, so the status bar has to follow the app or it can vanish.
+  useEffect(() => {
+    if (!mounted || !Capacitor.isNativePlatform()) return
+    void SystemBars.setStyle({ style: theme === 'dark' ? SystemBarsStyle.Dark : SystemBarsStyle.Light })
+  }, [mounted, theme])
 
   const toggleTheme = () => {
     setTheme(prev => {

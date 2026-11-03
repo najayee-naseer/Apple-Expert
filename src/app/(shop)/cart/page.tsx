@@ -1,7 +1,6 @@
 "use client"
 import { formatPrice } from '@/utils/formatPrice'
 
-import { useRef, useState } from 'react'
 import Link from 'next/link'
 import { Header } from '@/components/ui/Header'
 import { Button } from '@/components/ui/Button'
@@ -10,30 +9,11 @@ import { useWishlist } from '@/context/WishlistContext'
 import { useCustomerAuth } from '@/context/CustomerAuthContext'
 import { VipBadge } from '@/components/account/VipBadge'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Minus, Plus, Trash2, ShoppingBag, Star, Heart, ArrowRight, Box, ShieldCheck, AlertCircle, LoaderCircle, CheckCircle2 } from 'lucide-react'
+import { Minus, Plus, Trash2, ShoppingBag, Star, Heart, ArrowRight, Box, ShieldCheck, AlertCircle } from 'lucide-react'
 import type { CartItem } from '@/types'
 import { ConditionChip } from '@/components/product/ProductConditionWarranty'
-import { cartOrderKey, newOrderRequestId, placeOrder, type PlacedOrder } from '@/lib/customer/orders'
-import { centsToRupees, useCatalogProduct } from '@/lib/catalog'
-
-/**
- * The one line under the product name that tells the customer exactly which
- * thing they picked. Built only from fields that exist on the item — a chosen
- * variant's storage and colour, or, for a replacement part, the model it fits.
- * Nothing here is invented.
- */
-function describeSelection(item: CartItem): string | null {
-  if (item.variant) {
-    const parts = [item.variant.storage, item.variant.color].filter(Boolean)
-    return parts.length > 0 ? parts.join(' · ') : item.variant.name
-  }
-  const fits = item.product.model ?? item.product.compatibility?.[0]
-  if (fits) return `For ${fits}`
-  if (item.product.subcategory && item.product.subcategory !== 'Devices') {
-    return item.product.subcategory
-  }
-  return null
-}
+import { describeCartSelection } from '@/lib/customer/orders'
+import { useCatalogProduct } from '@/lib/catalog'
 
 /** Studio shots sit on a white sweep and need multiply to dissolve into the
  *  well; lifestyle photography fills the frame instead. */
@@ -54,7 +34,7 @@ function CartItemCard({ item }: { item: CartItem }) {
   const lineTotal = unitPrice * item.quantity
   // What can be bought of this exact option right now. undefined until live data loads.
   const available = liveVariant?.available ?? (item.variant ? undefined : liveProduct?.stock)
-  const selection = describeSelection(item)
+  const selection = describeCartSelection(item)
   const wishlisted = isWishlisted(item.product.id)
   const src = item.product.images[0]
   const cover = fillsFrame(src)
@@ -189,56 +169,9 @@ function CartItemCard({ item }: { item: CartItem }) {
 }
 
 export default function CartPage() {
-  const { cart, cartTotal, cartCount, clearCart, warrantyFor } = useCart()
+  const { cart, cartTotal, cartCount, warrantyFor } = useCart()
   const { isWholesaleVip } = useCustomerAuth()
-  const [placing, setPlacing] = useState(false)
-  const [orderError, setOrderError] = useState<string | null>(null)
-  const [placed, setPlaced] = useState<PlacedOrder | null>(null)
-
   const blocked = cart.some((item) => warrantyFor(item)?.unavailable)
-  // One request id per basket: retrying the same basket can never order it twice.
-  const orderRequest = useRef<{ key: string; id: string } | null>(null)
-
-  /** The database prices every line again; the total it returns is the one recorded. */
-  async function submitOrder() {
-    setPlacing(true)
-    setOrderError(null)
-    try {
-      const key = cartOrderKey(cart)
-      if (orderRequest.current?.key !== key) orderRequest.current = { key, id: newOrderRequestId() }
-      const order = await placeOrder(cart, orderRequest.current.id)
-      orderRequest.current = null
-      clearCart()
-      setPlaced(order)
-    } catch (err) {
-      setOrderError(err instanceof Error ? err.message : 'Your order could not be placed. Please try again.')
-    } finally {
-      setPlacing(false)
-    }
-  }
-
-  if (placed) {
-    return (
-      <div className="flex flex-col min-h-screen">
-        <Header />
-        <main className="flex-1 flex flex-col items-center justify-center text-center px-6 py-16">
-          <div className="w-24 h-24 rounded-full bg-well-cool border border-mint-deep shadow-card flex items-center justify-center mb-6">
-            <CheckCircle2 size={40} strokeWidth={1.6} className="text-primary" />
-          </div>
-          <h1 className="text-[22px] font-bold tracking-tight mb-1.5">Order placed</h1>
-          <p className="text-sm text-muted-foreground mb-1">Order {placed.orderNumber}</p>
-          <p className="text-lg font-bold tracking-tight mb-2">{formatPrice(centsToRupees(placed.totalCents))}</p>
-          <p className="text-[13px] text-muted-foreground mb-8 max-w-xs leading-relaxed">
-            We are holding your items and will contact you to confirm delivery and payment. Orders not confirmed within 48 hours are released.
-          </p>
-          <div className="flex w-full max-w-xs flex-col gap-2.5">
-            <Link href="/orders"><Button fullWidth size="lg">View my orders</Button></Link>
-            <Link href="/categories"><Button fullWidth variant="secondary">Continue shopping</Button></Link>
-          </div>
-        </main>
-      </div>
-    )
-  }
 
   if (cart.length === 0) {
     return (
@@ -311,12 +244,6 @@ export default function CartPage() {
           </p>
         </div>
 
-        {orderError && (
-          <div role="alert" className="mt-4 flex items-start gap-2.5 rounded-2xl border border-red-500/25 bg-red-500/8 px-4 py-3">
-            <AlertCircle size={16} className="mt-0.5 shrink-0 text-red-500" />
-            <p className="text-[13px] text-foreground">{orderError}</p>
-          </div>
-        )}
       </main>
 
       {/* Floating purchase panel — sits above the bottom navigation, sharing its
@@ -350,16 +277,24 @@ export default function CartPage() {
               </span>
             </Link>
 
-            <Button
-              size="lg"
-              disabled={placing || blocked}
-              onClick={() => void submitOrder()}
-              className="shrink-0 h-11 min-[360px]:h-12 px-5 min-[360px]:px-6 text-[15px] bg-gradient-cta-deep hover:bg-gradient-cta-deep-hover shadow-purchase-cta hover:shadow-purchase-cta-hover"
-            >
-              {placing
-                ? <><LoaderCircle size={16} className="mr-1.5 animate-spin motion-reduce:animate-none" />Placing…</>
-                : 'Place order'}
-            </Button>
+            {blocked ? (
+              <Button
+                size="lg"
+                disabled
+                className="shrink-0 h-11 min-[360px]:h-12 px-5 min-[360px]:px-6 text-[15px] bg-gradient-cta-deep"
+              >
+                Checkout
+              </Button>
+            ) : (
+              <Link href="/checkout" className="shrink-0">
+                <Button
+                  size="lg"
+                  className="h-11 min-[360px]:h-12 px-5 min-[360px]:px-6 text-[15px] bg-gradient-cta-deep hover:bg-gradient-cta-deep-hover shadow-purchase-cta hover:shadow-purchase-cta-hover"
+                >
+                  Checkout
+                </Button>
+              </Link>
+            )}
           </div>
         </div>
       </div>

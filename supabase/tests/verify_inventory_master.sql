@@ -118,7 +118,7 @@ begin
 
   -- M2 reservation expiry ----------------------------------------------------------
   perform pg_temp.as_user(c_customer);
-  v_order := (public.place_order('[{"product_id":"mt-num","quantity":3}]'::jsonb) ->> 'id')::uuid;
+  v_order := (pg_temp.place_order('[{"product_id":"mt-num","quantity":3}]'::jsonb) ->> 'id')::uuid;
   perform pg_temp.check_true('M2a hold lowers availability, not stock',
     pg_temp.avail('mt-num', null) = 17 and (select stock from public.products where id = 'mt-num') = 20);
 
@@ -141,7 +141,7 @@ begin
 
   -- A confirmed order has no expiry.
   perform pg_temp.as_user(c_customer);
-  v_order := (public.place_order('[{"product_id":"mt-num","quantity":1}]'::jsonb) ->> 'id')::uuid;
+  v_order := (pg_temp.place_order('[{"product_id":"mt-num","quantity":1}]'::jsonb) ->> 'id')::uuid;
   perform pg_temp.as_user(c_staff);
   update public.orders set status = 'confirmed' where id = v_order;
   perform pg_temp.check_true('M2h confirmed never expires',
@@ -370,7 +370,7 @@ begin
   perform public.admin_save_inventory_policy(2, null, 0, 'test limit');
   perform pg_temp.as_user(c_customer);
   perform pg_temp.expect_fail('M11b limit enforced',
-    $q$select public.place_order('[{"product_id":"mt-num","quantity":3}]'::jsonb)$q$, 'reservation_limit_reached:%');
+    $q$select pg_temp.place_order('[{"product_id":"mt-num","quantity":3}]'::jsonb)$q$, 'reservation_limit_reached:%');
   raise notice 'M11 ok - the limit is enforced once configured';
 end $$;
 

@@ -118,7 +118,7 @@ begin
   perform set_config('request.jwt.claims', null, true);
   v_err := null;
   begin
-    perform public.place_order('[{"product_id":"part-iphone-15-pro-battery","quantity":1}]'::jsonb);
+    perform pg_temp.place_order('[{"product_id":"part-iphone-15-pro-battery","quantity":1}]'::jsonb);
   exception when others then v_err := sqlerrm; end;
   perform set_config('role', 'postgres', true);
   if v_err is null then raise exception 'W3 FAILED - anonymous caller placed an order'; end if;
@@ -136,7 +136,7 @@ begin
   -- W4 - retail: display + 6-month warranty, client-supplied amounts ignored ---
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claims', '{"sub":"a1111111-1111-1111-1111-111111111111","role":"authenticated"}', true);
-  v_result := public.place_order(
+  v_result := pg_temp.place_order(
     '[{"product_id":"part-iphone-15-pro-display","warranty_option_id":"b0000000-0000-0000-0000-000000000006",
        "quantity":2,"unit_price_cents":1,"warranty_price_cents":0,"total_cents":1}]'::jsonb);
   perform set_config('role', 'postgres', true);
@@ -196,41 +196,41 @@ begin
   perform set_config('request.jwt.claims', '{"sub":"a1111111-1111-1111-1111-111111111111","role":"authenticated"}', true);
   -- disabled option
   v_err := null;
-  begin perform public.place_order('[{"product_id":"part-iphone-15-pro-display","warranty_option_id":"b0000000-0000-0000-0000-000000000012","quantity":1}]'::jsonb);
+  begin perform pg_temp.place_order('[{"product_id":"part-iphone-15-pro-display","warranty_option_id":"b0000000-0000-0000-0000-000000000012","quantity":1}]'::jsonb);
   exception when others then v_err := sqlerrm; end;
   if v_err not like 'warranty_option_invalid%' then raise exception 'W7 FAILED - disabled option: %', v_err; end if;
   -- another product's option
   v_err := null;
-  begin perform public.place_order('[{"product_id":"part-iphone-15-pro-display","warranty_option_id":"c0000000-0000-0000-0000-000000000003","quantity":1}]'::jsonb);
+  begin perform pg_temp.place_order('[{"product_id":"part-iphone-15-pro-display","warranty_option_id":"c0000000-0000-0000-0000-000000000003","quantity":1}]'::jsonb);
   exception when others then v_err := sqlerrm; end;
   if v_err not like 'warranty_option_invalid%' then raise exception 'W7 FAILED - foreign option: %', v_err; end if;
   -- warranty option on a product without selectable warranty
   v_err := null;
-  begin perform public.place_order('[{"product_id":"iphone-17-pro-max","variant_key":"v1","warranty_option_id":"b0000000-0000-0000-0000-000000000003","quantity":1}]'::jsonb);
+  begin perform pg_temp.place_order('[{"product_id":"iphone-17-pro-max","variant_key":"v1","warranty_option_id":"b0000000-0000-0000-0000-000000000003","quantity":1}]'::jsonb);
   exception when others then v_err := sqlerrm; end;
   if v_err not like 'warranty_not_applicable%' then raise exception 'W7 FAILED - not applicable: %', v_err; end if;
   -- variant required
   v_err := null;
-  begin perform public.place_order('[{"product_id":"iphone-17-pro-max","quantity":1}]'::jsonb);
+  begin perform pg_temp.place_order('[{"product_id":"iphone-17-pro-max","quantity":1}]'::jsonb);
   exception when others then v_err := sqlerrm; end;
   if v_err not like 'variant_required%' then raise exception 'W7 FAILED - variant required: %', v_err; end if;
   -- missing / zero / fractional quantity
   v_err := null;
-  begin perform public.place_order('[{"product_id":"part-iphone-15-pro-battery"}]'::jsonb);
+  begin perform pg_temp.place_order('[{"product_id":"part-iphone-15-pro-battery"}]'::jsonb);
   exception when others then v_err := sqlerrm; end;
   if v_err not like 'invalid_quantity%' then raise exception 'W7 FAILED - missing qty: %', v_err; end if;
   v_err := null;
-  begin perform public.place_order('[{"product_id":"part-iphone-15-pro-battery","quantity":0}]'::jsonb);
+  begin perform pg_temp.place_order('[{"product_id":"part-iphone-15-pro-battery","quantity":0}]'::jsonb);
   exception when others then v_err := sqlerrm; end;
   if v_err not like 'invalid_quantity%' then raise exception 'W7 FAILED - zero qty: %', v_err; end if;
   -- more than the stock on record (display stock is 12)
   v_err := null;
-  begin perform public.place_order('[{"product_id":"part-iphone-15-pro-display","quantity":13}]'::jsonb);
+  begin perform pg_temp.place_order('[{"product_id":"part-iphone-15-pro-display","quantity":13}]'::jsonb);
   exception when others then v_err := sqlerrm; end;
   if v_err not like 'insufficient_stock%' then raise exception 'W7 FAILED - stock: %', v_err; end if;
   -- unpublished product
   v_err := null;
-  begin perform public.place_order('[{"product_id":"no-such-product","quantity":1}]'::jsonb);
+  begin perform pg_temp.place_order('[{"product_id":"no-such-product","quantity":1}]'::jsonb);
   exception when others then v_err := sqlerrm; end;
   if v_err not like 'product_unavailable%' then raise exception 'W7 FAILED - unknown product: %', v_err; end if;
   perform set_config('role', 'postgres', true);
@@ -239,7 +239,7 @@ begin
   -- W8 - no option given -> the product's default option ---------------------
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claims', '{"sub":"a1111111-1111-1111-1111-111111111111","role":"authenticated"}', true);
-  v_result := public.place_order('[{"product_id":"part-iphone-15-pro-battery","quantity":1}]'::jsonb);
+  v_result := pg_temp.place_order('[{"product_id":"part-iphone-15-pro-battery","quantity":1}]'::jsonb);
   perform set_config('role', 'postgres', true);
   select * into v_item from public.order_items where order_id = (v_result ->> 'id')::uuid;
   if v_item.warranty_option_id <> 'c0000000-0000-0000-0000-000000000003'
@@ -252,7 +252,7 @@ begin
   -- W9 - VIP pays the VIP price; expired VIP and retail pay retail ------------
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claims', '{"sub":"a2222222-2222-2222-2222-222222222222","role":"authenticated"}', true);
-  v_result := public.place_order('[{"product_id":"iphone-17-pro-max","variant_key":"v1","quantity":1}]'::jsonb);
+  v_result := pg_temp.place_order('[{"product_id":"iphone-17-pro-max","variant_key":"v1","quantity":1}]'::jsonb);
   perform set_config('role', 'postgres', true);
   select * into v_item from public.order_items where order_id = (v_result ->> 'id')::uuid;
   select * into v_order from public.orders where id = (v_result ->> 'id')::uuid;
@@ -266,7 +266,7 @@ begin
 
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claims', '{"sub":"a3333333-3333-3333-3333-333333333333","role":"authenticated"}', true);
-  v_result := public.place_order('[{"product_id":"iphone-17-pro-max","variant_key":"v1","quantity":1}]'::jsonb);
+  v_result := pg_temp.place_order('[{"product_id":"iphone-17-pro-max","variant_key":"v1","quantity":1}]'::jsonb);
   perform set_config('role', 'postgres', true);
   select * into v_item from public.order_items where order_id = (v_result ->> 'id')::uuid;
   if v_item.unit_price_cents <> 35900000 or v_item.tier_code_snapshot <> 'retail' then
@@ -275,7 +275,7 @@ begin
 
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claims', '{"sub":"a1111111-1111-1111-1111-111111111111","role":"authenticated"}', true);
-  v_result := public.place_order('[{"product_id":"iphone-17-pro-max","variant_key":"v1","quantity":1}]'::jsonb);
+  v_result := pg_temp.place_order('[{"product_id":"iphone-17-pro-max","variant_key":"v1","quantity":1}]'::jsonb);
   perform set_config('role', 'postgres', true);
   select * into v_item from public.order_items where order_id = (v_result ->> 'id')::uuid;
   if v_item.unit_price_cents <> 35900000 then
@@ -286,7 +286,7 @@ begin
   -- W10 - VIP with no VIP row falls back to retail + warranty -----------------
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claims', '{"sub":"a2222222-2222-2222-2222-222222222222","role":"authenticated"}', true);
-  v_result := public.place_order('[{"product_id":"part-iphone-15-pro-display","warranty_option_id":"b0000000-0000-0000-0000-000000000003","quantity":1}]'::jsonb);
+  v_result := pg_temp.place_order('[{"product_id":"part-iphone-15-pro-display","warranty_option_id":"b0000000-0000-0000-0000-000000000003","quantity":1}]'::jsonb);
   perform set_config('role', 'postgres', true);
   select * into v_item from public.order_items where order_id = (v_result ->> 'id')::uuid;
   if v_item.unit_price_cents <> v_display + 150000 or v_item.tier_code_snapshot <> 'retail' then
@@ -319,7 +319,7 @@ begin
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claims', '{"sub":"a1111111-1111-1111-1111-111111111111","role":"authenticated"}', true);
   v_err := null;
-  begin perform public.place_order('[{"product_id":"part-iphone-15-pro-battery","quantity":1}]'::jsonb);
+  begin perform pg_temp.place_order('[{"product_id":"part-iphone-15-pro-battery","quantity":1}]'::jsonb);
   exception when others then v_err := sqlerrm; end;
   perform set_config('role', 'postgres', true);
   update public.store_settings set maintenance_mode = false where id;
@@ -329,7 +329,7 @@ begin
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claims', '{"sub":"a2222222-2222-2222-2222-222222222222","role":"authenticated"}', true);
   v_err := null;
-  begin perform public.place_order('[{"product_id":"part-iphone-15-pro-battery","quantity":1}]'::jsonb);
+  begin perform pg_temp.place_order('[{"product_id":"part-iphone-15-pro-battery","quantity":1}]'::jsonb);
   exception when others then v_err := sqlerrm; end;
   perform set_config('role', 'postgres', true);
   update public.store_settings set wholesale_enabled = true where id;

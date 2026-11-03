@@ -297,7 +297,7 @@ function CategoryEditor({
         className="absolute inset-0 bg-black/45 backdrop-blur-[2px]" />
 
       <div role="dialog" aria-modal="true" aria-label={existing ? 'Edit category' : 'Add category'}
-        className="relative flex h-full w-full max-w-lg flex-col border-l border-mint/80 bg-background shadow-float dark:border-border">
+        className="relative safe-y flex h-full w-full max-w-lg flex-col border-l border-mint/80 bg-background shadow-float dark:border-border">
 
         <header className="flex items-center gap-3 border-b border-mint/80 bg-glass px-5 py-4 backdrop-blur-xl dark:border-border">
           <div className="min-w-0 flex-1">

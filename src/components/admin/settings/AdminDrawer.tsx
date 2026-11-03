@@ -28,7 +28,7 @@ export function AdminDrawer({
         className="absolute inset-0 bg-black/45 backdrop-blur-[2px]" />
 
       <div role="dialog" aria-modal="true" aria-label={title}
-        className="relative flex h-full w-full max-w-lg flex-col bg-background border-l border-mint/80 dark:border-border shadow-float">
+        className="relative safe-y flex h-full w-full max-w-lg flex-col bg-background border-l border-mint/80 dark:border-border shadow-float">
         <header className="flex items-start gap-3 border-b border-mint/80 dark:border-border px-5 py-4 bg-glass backdrop-blur-xl">
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-[17px] font-bold tracking-tight text-foreground">{title}</h2>

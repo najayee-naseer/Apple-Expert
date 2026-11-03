@@ -131,7 +131,7 @@ begin
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claims', '{"sub":"c1111111-1111-1111-1111-111111111111","role":"authenticated"}', true);
   -- 256GB pre-owned + its own 6-month override option, with tampered amounts
-  v_res := public.place_order(format('[{"product_id":"iphone-17-pro-max","variant_key":"v2","warranty_option_id":"%s","quantity":1,"unit_price_cents":1,"warranty_price_cents":0}]', opt_v2_6)::jsonb);
+  v_res := pg_temp.place_order(format('[{"product_id":"iphone-17-pro-max","variant_key":"v2","warranty_option_id":"%s","quantity":1,"unit_price_cents":1,"warranty_price_cents":0}]', opt_v2_6)::jsonb);
   perform set_config('role', 'postgres', true);
   select * into v_item from public.order_items where order_id = (v_res ->> 'id')::uuid;
   if v_item.condition_snapshot <> 'pre_owned' or v_item.condition_grade_snapshot <> 'Grade A'
@@ -143,7 +143,7 @@ begin
 
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claims', '{"sub":"c1111111-1111-1111-1111-111111111111","role":"authenticated"}', true);
-  v_res := public.place_order('[{"product_id":"iphone-17-pro-max","variant_key":"v1","quantity":1}]'::jsonb);
+  v_res := pg_temp.place_order('[{"product_id":"iphone-17-pro-max","variant_key":"v1","quantity":1}]'::jsonb);
   perform set_config('role', 'postgres', true);
   select * into v_item from public.order_items where order_id = (v_res ->> 'id')::uuid;
   if v_item.condition_snapshot <> 'brand_new' or v_item.condition_grade_snapshot is not null then
@@ -157,26 +157,26 @@ begin
   -- V6 - fallback, no warranty, invalid options ----------------------------------
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claims', '{"sub":"c1111111-1111-1111-1111-111111111111","role":"authenticated"}', true);
-  v_res := public.place_order('[{"product_id":"iphone-17-pro-max","variant_key":"v4","quantity":1}]'::jsonb);
+  v_res := pg_temp.place_order('[{"product_id":"iphone-17-pro-max","variant_key":"v4","quantity":1}]'::jsonb);
   select * into v_item from public.order_items where order_id = (v_res ->> 'id')::uuid;
   if v_item.warranty_option_id <> opt_p12 or v_item.condition_snapshot <> 'brand_new' or v_item.base_unit_price_cents <> price_v4 then
     raise exception 'V6 FAILED - v4 (no override) did not fall back to the product plan';
   end if;
-  v_res := public.place_order('[{"product_id":"iphone-17-pro-max","variant_key":"v3","quantity":1}]'::jsonb);
+  v_res := pg_temp.place_order('[{"product_id":"iphone-17-pro-max","variant_key":"v3","quantity":1}]'::jsonb);
   select * into v_item from public.order_items where order_id = (v_res ->> 'id')::uuid;
   if v_item.warranty_label_snapshot is not null or v_item.warranty_price_cents_snapshot <> 0 then
     raise exception 'V6 FAILED - v3 (override: none) recorded a warranty';
   end if;
   v_err := null;
-  begin perform public.place_order(format('[{"product_id":"iphone-17-pro-max","variant_key":"v3","warranty_option_id":"%s","quantity":1}]', opt_p12)::jsonb);
+  begin perform pg_temp.place_order(format('[{"product_id":"iphone-17-pro-max","variant_key":"v3","warranty_option_id":"%s","quantity":1}]', opt_p12)::jsonb);
   exception when others then v_err := sqlerrm; end;
   if v_err not like 'warranty_not_applicable%' then raise exception 'V6 FAILED - v3 accepted a warranty: %', v_err; end if;
   v_err := null;
-  begin perform public.place_order(format('[{"product_id":"iphone-17-pro-max","variant_key":"v1","warranty_option_id":"%s","quantity":1}]', opt_v2_6)::jsonb);
+  begin perform pg_temp.place_order(format('[{"product_id":"iphone-17-pro-max","variant_key":"v1","warranty_option_id":"%s","quantity":1}]', opt_v2_6)::jsonb);
   exception when others then v_err := sqlerrm; end;
   if v_err not like 'warranty_option_invalid%' then raise exception 'V6 FAILED - v1 accepted v2''s option: %', v_err; end if;
   v_err := null;
-  begin perform public.place_order(format('[{"product_id":"iphone-17-pro-max","variant_key":"v2","warranty_option_id":"%s","quantity":1}]', opt_p12)::jsonb);
+  begin perform pg_temp.place_order(format('[{"product_id":"iphone-17-pro-max","variant_key":"v2","warranty_option_id":"%s","quantity":1}]', opt_p12)::jsonb);
   exception when others then v_err := sqlerrm; end;
   if v_err not like 'warranty_option_invalid%' then raise exception 'V6 FAILED - v2 accepted the product plan option it overrides: %', v_err; end if;
   perform set_config('role', 'postgres', true);
@@ -185,7 +185,7 @@ begin
   -- V7 - variant-less products ---------------------------------------------------
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claims', '{"sub":"c1111111-1111-1111-1111-111111111111","role":"authenticated"}', true);
-  v_res := public.place_order('[{"product_id":"iphone-13-mini","quantity":1},{"product_id":"acc-magsafe-charger","quantity":1}]'::jsonb);
+  v_res := pg_temp.place_order('[{"product_id":"iphone-13-mini","quantity":1},{"product_id":"acc-magsafe-charger","quantity":1}]'::jsonb);
   perform set_config('role', 'postgres', true);
   select count(*) into v_count from public.order_items
    where order_id = (v_res ->> 'id')::uuid
@@ -195,7 +195,7 @@ begin
   delete from public.product_conditions where product_id = 'acc-magsafe-charger';
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claims', '{"sub":"c1111111-1111-1111-1111-111111111111","role":"authenticated"}', true);
-  v_res := public.place_order('[{"product_id":"acc-magsafe-charger","quantity":1}]'::jsonb);
+  v_res := pg_temp.place_order('[{"product_id":"acc-magsafe-charger","quantity":1}]'::jsonb);
   perform set_config('role', 'postgres', true);
   select * into v_item from public.order_items where order_id = (v_res ->> 'id')::uuid;
   if v_item.condition_snapshot <> 'brand_new' then raise exception 'V7 FAILED - no row did not mean Brand New'; end if;
@@ -206,7 +206,7 @@ begin
   values ('iphone-17-pro-max', v2, 'wholesale_vip', 30000000, 1);
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claims', '{"sub":"c2222222-2222-2222-2222-222222222222","role":"authenticated"}', true);
-  v_res := public.place_order(format('[{"product_id":"iphone-17-pro-max","variant_key":"v2","warranty_option_id":"%s","quantity":1}]', opt_v2_6)::jsonb);
+  v_res := pg_temp.place_order(format('[{"product_id":"iphone-17-pro-max","variant_key":"v2","warranty_option_id":"%s","quantity":1}]', opt_v2_6)::jsonb);
   perform set_config('role', 'postgres', true);
   select * into v_item from public.order_items where order_id = (v_res ->> 'id')::uuid;
   if v_item.unit_price_cents <> 30000000 + 500000 or v_item.tier_code_snapshot <> 'wholesale_vip' or v_item.condition_snapshot <> 'pre_owned' then

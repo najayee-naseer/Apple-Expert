@@ -204,7 +204,7 @@ begin
 
   -- reserved (oldest first)
   perform pg_temp.as_user(c_customer);
-  v_order := (public.place_order('[{"product_id":"db-unit","quantity":1}]'::jsonb) ->> 'id')::uuid;
+  v_order := (pg_temp.place_order('[{"product_id":"db-unit","quantity":1}]'::jsonb) ->> 'id')::uuid;
   perform pg_temp.as_user(c_staff);
   perform pg_temp.check_true('D6e reserved', public.pos_scan(v_codes[1], null) ->> 'status' = 'reserved');
   perform pg_temp.expect_fail('D6f reserved cannot be sold',

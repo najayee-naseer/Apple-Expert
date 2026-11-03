@@ -179,7 +179,7 @@ export function WholesaleApplicationEditor({
       <button type="button" aria-label="Close" onClick={onClose}
         className="absolute inset-0 bg-black/45 backdrop-blur-[2px]" />
       <div role="dialog" aria-modal="true" aria-labelledby="wa-title"
-        className="relative flex max-h-[92vh] w-full max-w-2xl flex-col rounded-t-[26px] sm:rounded-[26px] border border-mint/80 dark:border-border bg-surface shadow-float">
+        className="relative flex max-h-[92vh] w-full max-w-2xl flex-col pb-[var(--safe-bottom)] rounded-t-[26px] sm:rounded-[26px] border border-mint/80 dark:border-border bg-surface shadow-float">
 
         <header className="flex items-start justify-between gap-3 border-b border-mint/70 dark:border-border px-5 py-4">
           <div className="min-w-0">
